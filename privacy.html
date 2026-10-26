@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>StudyFlow privacy</title>
+<meta name="description" content="What StudyFlow stores, who can see it, and how to delete it.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%231f3a73'/%3E%3Cpath d='M6 8h8.5a2.75 2.75 0 0 1 0 5.5h-5a2.75 2.75 0 0 0 0 5.5H18' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700&family=Schibsted+Grotesk:wght@800&display=swap">
+<style>
+:root { --bg: #f3f5f9; --surface: #ffffff; --ink: #121a2e; --ink-2: #444e69; --line: #dce1ea; --accent: #1f3a73; --link: #2b55a8; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0c1120; --surface: #141b2d; --ink: #e9edf6; --ink-2: #b3bbd0; --line: #29334c; --accent: #a8c0ff; --link: #a8c0ff; color-scheme: dark; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 "Atkinson Hyperlegible Next", system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 40px max(20px, env(safe-area-inset-left, 0px)) 64px; }
+.card { background: var(--surface); border-radius: 8px; padding: 32px clamp(20px, 5vw, 40px); border: 1px solid var(--line); }
+.brand { display: inline-flex; align-items: center; gap: 10px; font: 800 20px "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif; color: var(--ink); text-decoration: none; margin-bottom: 20px; }
+.brand span { width: 28px; height: 28px; border-radius: 7px; background: #1f3a73; display: grid; place-items: center; }
+h1 { font: 800 clamp(30px, 5vw, 40px)/1.1 "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif; margin: 0 0 6px; letter-spacing: -0.02em; }
+h2 { font: 800 21px/1.25 "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif; margin: 32px 0 8px; }
+p, li { max-width: 68ch; }
+ul { padding-left: 22px; }
+li + li { margin-top: 4px; }
+.meta { color: var(--ink-2); margin: 0 0 24px; }
+a { color: var(--link); }
+.short { border-left: 4px solid var(--accent); padding: 4px 0 4px 16px; margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<main>
+<a class="brand" href="./"><span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7h9.5a3 3 0 0 1 0 6h-5a3 3 0 0 0 0 6H19"/></svg></span>StudyFlow</a>
+<div class="card">
+<h1>Privacy</h1>
+<p class="meta">Last updated 26 October 2026</p>
+
+<p class="short">StudyFlow saves the study information you type in so you can use it on any device. Only you can see it through the app. There are no ads, nothing is sold, and nothing is used to track you.</p>
+
+<h2>Who runs StudyFlow</h2>
+<p>StudyFlow is run by Ahaan Kothari. For questions or requests about your data, email <a href="mailto:ahaankothari@gmail.com">ahaankothari@gmail.com</a>.</p>
+
+<h2>What StudyFlow stores</h2>
+<ul>
+<li><b>Your account:</b> your email address and first name. If you sign in with Google, Google also shares your name, email address and profile picture link with StudyFlow. Your password is never stored in readable form.</li>
+<li><b>What you enter:</b> subjects and topics, homework and projects, tests, marks and targets, flashcards, logged mistakes, notes and links, study times and activities, and the study sessions, streaks and points the app records as you use it.</li>
+</ul>
+<p>StudyFlow does not use analytics, advertising or tracking tools.</p>
+
+<h2>Where it is kept</h2>
+<ul>
+<li>Your account and study data are stored with <a href="https://supabase.com/privacy" target="_blank" rel="noopener">Supabase</a>, a database service, on servers in Mumbai, India.</li>
+<li>A copy is also kept in your browser on each device where you sign in, so the app works offline. Signing out removes it from that device.</li>
+</ul>
+
+<h2>Who can see it</h2>
+<ul>
+<li>Only you. The database only lets each account read and change its own data, so other students cannot see yours.</li>
+<li>As the administrator, Ahaan can technically reach the database to keep it running and fix problems. He does not read, share or use your study data for anything else.</li>
+<li>Your data is not shared with your school, teachers or anyone else unless you share it yourself.</li>
+</ul>
+
+<h2>Other services the page uses</h2>
+<p>To load and run, StudyFlow uses these services, which may see your device's IP address as part of normal web traffic:</p>
+<ul>
+<li><a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">GitHub Pages</a>, which hosts the website.</li>
+<li><a href="https://www.jsdelivr.com/terms/privacy-policy-jsdelivr-net" target="_blank" rel="noopener">jsDelivr</a>, which delivers the code library that connects to the database.</li>
+<li><a href="https://developers.google.com/fonts/faq/privacy" target="_blank" rel="noopener">Google Fonts</a>, which delivers the text fonts.</li>
+<li><a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google</a>, only if you choose "Continue with Google".</li>
+</ul>
+
+<h2>Students under 18</h2>
+<p>StudyFlow is made for school students. If you are under 18, please get a parent or guardian to agree before you create an account.</p>
+
+<h2>Your choices</h2>
+<ul>
+<li><b>Download your data:</b> in the app, open Progress → Settings → Download a backup.</li>
+<li><b>Erase your study data:</b> Progress → Settings → Reset StudyFlow.</li>
+<li><b>Delete your account completely:</b> email <a href="mailto:ahaankothari@gmail.com">ahaankothari@gmail.com</a> from the address you signed up with, and your account and all its data will be deleted within 30 days.</li>
+</ul>
+
+<h2>Changes</h2>
+<p>If this page changes, the date at the top will change too. Big changes will also be announced in the app.</p>
+</div>
+</main>
+</body>
+</html>

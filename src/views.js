@@ -873,6 +873,7 @@ V.settings = () => {
         ${s.meta.activities.length ? `<div class="list" style="margin-bottom:14px">${s.meta.activities.map((a) => `<div class="li"><div class="li-main"><span class="li-title">${esc(a.name)}</span><span class="li-sub">${a.date ? SF.fmtDay(a.date) : (a.days || []).map((d) => SF.DAYS[d]).join(", ")} · ${esc(a.start)}–${esc(a.end)}</span></div><button type="button" class="btn ghost sm" data-act="del-activity" data-id="${esc(a.id)}" aria-label="Remove ${esc(a.name)}">${icon("trash", "ico-sm")}</button></div>`).join("")}</div>` : ""}
         ${activityForm("add-activity")}</section>
       <section class="panel"><div class="panel-head"><h2>You</h2></div><div class="stack-sm"><label class="field"><span>First name (for the greeting)</span><input class="input" id="st-name" value="${esc(s.meta.name)}" data-change="set-name" autocomplete="given-name"></label>
+        ${window.SF_WEB ? `<a class="small" href="privacy.html" target="_blank" rel="noopener">Privacy: what StudyFlow stores and how to delete it</a>` : ""}
         ${window.SF_WEB && S.auth && S.auth.user ? `<div class="between" style="border-top:1px solid var(--line);padding-top:12px;margin-top:4px"><div><div class="label">Signed in as</div><div style="overflow-wrap:anywhere">${esc(S.auth.user.email || "")}</div></div><button type="button" class="btn" data-act="sign-out">Sign out</button></div>` : ""}</div></section>
       <section class="panel"><div class="panel-head"><h2>Your data</h2></div>
         <div class="stack-sm">

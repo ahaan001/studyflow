@@ -289,7 +289,7 @@ function renderAuth() {
       </ul>
     </div>
     <div class="auth-card">${inner}
-      <p class="tiny faint" style="margin-top:20px">StudyFlow saves your subjects, assignments, grades and revision progress to your account so you can use it on any device. Only you can see your data.</p>
+      <p class="tiny faint" style="margin-top:20px">StudyFlow saves your subjects, assignments, grades and revision progress to your account so you can use it on any device. Only you can see your data. <a href="privacy.html">Privacy</a></p>
     </div>
   </div>`;
   if (S.auth.focusId) {

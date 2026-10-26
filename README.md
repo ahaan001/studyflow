@@ -23,6 +23,7 @@ A study planner for Grade 9 students. It plans each day around real free time, f
 | `src/style.css`, `src/web.css` | Styles (light and dark). |
 | `src/shell.html` | Page markup. |
 | `supabase/migrations/` | SQL for the `studyflow_docs` table and its policies. |
+| `privacy.html` | Privacy page, linked from the sign-in screen and Google's consent screen. |
 
 ## Making changes
 
