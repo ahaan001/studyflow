@@ -874,6 +874,7 @@ V.settings = () => {
         ${activityForm("add-activity")}</section>
       <section class="panel"><div class="panel-head"><h2>You</h2></div><div class="stack-sm"><label class="field"><span>First name (for the greeting)</span><input class="input" id="st-name" value="${esc(s.meta.name)}" data-change="set-name" autocomplete="given-name"></label>
         ${window.SF_WEB ? `<a class="small" href="privacy.html" target="_blank" rel="noopener">Privacy: what StudyFlow stores and how to delete it</a>` : ""}
+        ${window.SF_WEB && S.auth && S.auth.user ? `<form class="stack-sm" data-form="change-pass" style="border-top:1px solid var(--line);padding-top:12px;margin-top:4px"><label class="field"><span>Change password</span><input class="input" type="password" name="password" id="st-newpass" minlength="8" autocomplete="new-password" placeholder="New password (8+ characters, a letter and a number)" required></label><button class="btn" type="submit" style="align-self:flex-start">Save new password</button></form>` : ""}
         ${window.SF_WEB && S.auth && S.auth.user ? `<div class="between" style="border-top:1px solid var(--line);padding-top:12px;margin-top:4px"><div><div class="label">Signed in as</div><div style="overflow-wrap:anywhere">${esc(S.auth.user.email || "")}</div></div><button type="button" class="btn" data-act="sign-out">Sign out</button></div>` : ""}</div></section>
       <section class="panel"><div class="panel-head"><h2>Your data</h2></div>
         <div class="stack-sm">

@@ -3155,6 +3155,7 @@ V.settings = () => {
         ${activityForm("add-activity")}</section>
       <section class="panel"><div class="panel-head"><h2>You</h2></div><div class="stack-sm"><label class="field"><span>First name (for the greeting)</span><input class="input" id="st-name" value="${esc(s.meta.name)}" data-change="set-name" autocomplete="given-name"></label>
         ${window.SF_WEB ? `<a class="small" href="privacy.html" target="_blank" rel="noopener">Privacy: what StudyFlow stores and how to delete it</a>` : ""}
+        ${window.SF_WEB && S.auth && S.auth.user ? `<form class="stack-sm" data-form="change-pass" style="border-top:1px solid var(--line);padding-top:12px;margin-top:4px"><label class="field"><span>Change password</span><input class="input" type="password" name="password" id="st-newpass" minlength="8" autocomplete="new-password" placeholder="New password (8+ characters, a letter and a number)" required></label><button class="btn" type="submit" style="align-self:flex-start">Save new password</button></form>` : ""}
         ${window.SF_WEB && S.auth && S.auth.user ? `<div class="between" style="border-top:1px solid var(--line);padding-top:12px;margin-top:4px"><div><div class="label">Signed in as</div><div style="overflow-wrap:anywhere">${esc(S.auth.user.email || "")}</div></div><button type="button" class="btn" data-act="sign-out">Sign out</button></div>` : ""}</div></section>
       <section class="panel"><div class="panel-head"><h2>Your data</h2></div>
         <div class="stack-sm">
@@ -4706,6 +4707,7 @@ ACT["reset-all"] = () => { wipe(); toast("Everything was deleted."); };
 const SUPABASE_URL = "https://fdjcufvtjkpyrbodkyfj.supabase.co";
 const SUPABASE_KEY = "sb_publishable_v3b-lBbb7L9WiikC76yHJg_drOdpLv3";
 const TABLE = "studyflow_docs";
+const SUPPORT_EMAIL = "ahaankothari@gmail.com";
 
 const Web = {
   sb: null,
@@ -4906,6 +4908,8 @@ const Web = {
     S.focus = null;
     S.rev = null;
     LKEY = "studyflow:v1";
+    const t = $("#toasts");
+    if (t) t.innerHTML = "";
     renderModal();
     renderAuth();
   },
@@ -4923,10 +4927,9 @@ function authMsg(e) {
   const code = String((e && (e.code || e.error_code)) || "").toLowerCase();
   if (code === "invalid_credentials" || m.includes("invalid login")) return "That email and password don't match. Check them, or reset your password.";
   if (code === "user_already_exists" || m.includes("already registered")) return "There's already an account with that email. Sign in instead.";
-  if (code.includes("rate_limit") || m.includes("rate limit") || (e && e.status === 429)) return "Too many tries right now. Wait a few minutes, or use Continue with Google.";
+  if (code.includes("rate_limit") || m.includes("rate limit") || (e && e.status === 429)) return "Too many tries right now. Wait a few minutes and try again.";
   if (code === "weak_password" || m.includes("password should")) return "Pick a longer password: at least 8 characters, mixing letters and numbers.";
   if (code === "email_address_invalid" || m.includes("invalid email") || m.includes("email address") && m.includes("invalid")) return "That email address doesn't look right.";
-  if (m.includes("provider is not enabled") || m.includes("unsupported provider")) return "Google sign-in isn't switched on yet. Use email and password for now.";
   if (m.includes("signups not allowed") || m.includes("signup is disabled")) return "New accounts are turned off right now. Ask your teacher.";
   if (m.includes("failed to fetch") || m.includes("network")) return "Can't reach StudyFlow. Check your internet connection.";
   if (m.includes("same password") || code === "same_password") return "Choose a password you haven't used before.";
@@ -4960,21 +4963,16 @@ function renderAuth() {
       ${a.error ? `<div class="alert crit">${icon("alert")}<div>${esc(a.error)}</div></div>` : ""}
       <button class="btn primary" type="submit" ${a.busy ? "disabled" : ""}>${a.busy ? `<span class="spin"></span>` : ""}Save password and sign in</button></form>`;
   } else if (a.mode === "reset") {
-    inner = `<form class="stack" data-form="auth-reset"><div><h2>Reset your password</h2><p class="muted small">We'll email you a link to choose a new one.</p></div>
-      <label class="field"><span>Email</span><input class="input" type="email" name="email" id="au-email" required autocomplete="email" value="${esc(a.email || "")}"></label>
-      ${a.error ? `<div class="alert crit">${icon("alert")}<div>${esc(a.error)}</div></div>` : ""}${a.info ? `<div class="alert info">${icon("info")}<div>${esc(a.info)}</div></div>` : ""}
-      <button class="btn primary" type="submit" ${a.busy ? "disabled" : ""}>${a.busy ? `<span class="spin"></span>` : ""}Send reset link</button>
-      <button type="button" class="btn ghost" data-act="auth-mode" data-mode="signin">${icon("back", "ico-sm")}Back to sign in</button></form>`;
+    inner = `<div class="stack"><div><h2>Forgot your password?</h2><p class="muted" style="margin-top:6px">Email <b style="user-select:all">${esc(SUPPORT_EMAIL)}</b> from the address you signed up with, and you'll get a new temporary password. Change it in Settings once you're back in.</p></div>
+      <button type="button" class="btn ghost" style="align-self:flex-start" data-act="auth-mode" data-mode="signin">${icon("back", "ico-sm")}Back to sign in</button></div>`;
   } else {
     const up = a.mode === "signup";
     inner = `<div class="stack">
       <div class="seg" role="tablist" style="align-self:flex-start"><button type="button" role="tab" aria-pressed="${!up}" data-act="auth-mode" data-mode="signin">Sign in</button><button type="button" role="tab" aria-pressed="${up}" data-act="auth-mode" data-mode="signup">Create account</button></div>
-      <button type="button" class="btn" style="min-height:48px;font-size:16px" data-act="auth-google" ${a.busy ? "disabled" : ""}>Continue with Google</button>
-      <div class="auth-or"><span>or with email</span></div>
       <form class="stack-sm" data-form="${up ? "auth-signup" : "auth-signin"}">
         ${up ? `<label class="field"><span>First name</span><input class="input" name="name" id="au-name" autocomplete="given-name" required value="${esc(a.name || "")}"></label>` : ""}
         <label class="field"><span>Email</span><input class="input" type="email" name="email" id="au-email" required autocomplete="email" value="${esc(a.email || "")}"></label>
-        <label class="field"><span>Password${up ? " (at least 8 characters)" : ""}</span><div class="pw"><input class="input" type="password" name="password" id="au-pass" ${up ? 'minlength="8"' : ""} required autocomplete="${up ? "new-password" : "current-password"}"><button type="button" class="btn ghost xs" data-act="auth-showpass" aria-label="Show password">Show</button></div></label>
+        <label class="field"><span>Password${up ? " (8+ characters, with a letter and a number)" : ""}</span><div class="pw"><input class="input" type="password" name="password" id="au-pass" ${up ? 'minlength="8"' : ""} required autocomplete="${up ? "new-password" : "current-password"}"><button type="button" class="btn ghost xs" data-act="auth-showpass" aria-label="Show password">Show</button></div></label>
         ${a.error ? `<div class="alert crit">${icon("alert")}<div>${esc(a.error)}</div></div>` : ""}${a.info ? `<div class="alert info">${icon("info")}<div>${esc(a.info)}</div></div>` : ""}
         <button class="btn primary" type="submit" style="min-height:46px" ${a.busy ? "disabled" : ""}>${a.busy ? `<span class="spin"></span>` : ""}${up ? "Create account" : "Sign in"}</button>
       </form>
@@ -5021,11 +5019,6 @@ ACT["auth-showpass"] = (el) => {
   el.textContent = show ? "Hide" : "Show";
   el.setAttribute("aria-label", show ? "Hide password" : "Show password");
 };
-ACT["auth-google"] = async () => {
-  authBusy(true, { error: "", info: "" });
-  const { error } = await Web.sb.auth.signInWithOAuth({ provider: "google", options: { redirectTo: Web.base } });
-  if (error) authBusy(false, { error: authMsg(error) });
-};
 ACT["auth-retry"] = () => {
   if (!S.auth.user) return location.reload();
   S.auth.status = "syncing";
@@ -5043,25 +5036,37 @@ FORM["auth-signin"] = async (fd) => {
 };
 FORM["auth-signup"] = async (fd) => {
   const name = String(fd.get("name") || "").trim(), email = String(fd.get("email") || "").trim(), password = String(fd.get("password") || "");
-  if (password.length < 8) return authBusy(false, { error: "Pick a password with at least 8 characters.", name, email, focusId: "au-pass" });
+  if (password.length < 8 || !/[a-z]/i.test(password) || !/[0-9]/.test(password))
+    return authBusy(false, { error: "Use at least 8 characters, with at least one letter and one number.", name, email, focusId: "au-pass" });
   authBusy(true, { error: "", info: "", name, email });
-  const { data, error } = await Web.sb.auth.signUp({ email, password, options: { data: { full_name: name }, emailRedirectTo: Web.base } });
-  if (error) return authBusy(false, { error: authMsg(error) });
-  if (data && data.session) return;
-  // New accounts are confirmed automatically on this project, so sign straight in.
-  const r = await Web.sb.auth.signInWithPassword({ email, password });
-  if (r.error) {
-    const m = String(r.error.message || "").toLowerCase();
-    if (m.includes("not confirmed")) return authBusy(false, { mode: "signin", info: "Account created. Check your email for a confirmation link, then sign in." });
-    return authBusy(false, { mode: "signin", error: "Couldn't create that account. If you already have one, sign in or reset your password." });
+  let res, out = {};
+  try {
+    res = await fetch(SUPABASE_URL + "/functions/v1/studyflow-signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY },
+      body: JSON.stringify({ name, email, password }),
+    });
+    out = await res.json().catch(() => ({}));
+  } catch (e) {
+    return authBusy(false, { error: "Can't reach StudyFlow. Check your internet connection." });
   }
+  if (!res.ok) {
+    if (out.error === "exists") return authBusy(false, { mode: "signin", error: out.message, email, focusId: "au-pass" });
+    return authBusy(false, { error: out.message || "Couldn't create your account. Try again in a minute." });
+  }
+  const r = await Web.sb.auth.signInWithPassword({ email, password });
+  if (r.error) authBusy(false, { mode: "signin", info: "Account created. Sign in with your email and password.", email });
 };
-FORM["auth-reset"] = async (fd) => {
-  const email = String(fd.get("email") || "").trim();
-  authBusy(true, { error: "", info: "", email });
-  const { error } = await Web.sb.auth.resetPasswordForEmail(email, { redirectTo: Web.base + "?reset=1" });
-  if (error) return authBusy(false, { error: authMsg(error) });
-  authBusy(false, { info: "If there's an account for that email, a reset link is on its way. It can take a few minutes; check spam too." });
+FORM["change-pass"] = async (fd, f) => {
+  const password = String(fd.get("password") || "");
+  if (password.length < 8 || !/[a-z]/i.test(password) || !/[0-9]/.test(password)) return toast("Use at least 8 characters, with a letter and a number.", "err");
+  const btn = f.querySelector("button[type=submit]");
+  if (btn) btn.disabled = true;
+  const { error } = await Web.sb.auth.updateUser({ password });
+  if (btn) btn.disabled = false;
+  if (error) return toast(authMsg(error), "err");
+  f.reset();
+  toast("Password changed.");
 };
 FORM["auth-newpass"] = async (fd) => {
   const password = String(fd.get("password") || "");
