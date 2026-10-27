@@ -318,7 +318,8 @@ textarea.input { min-height: 96px; resize: vertical; line-height: 1.5; }
 .subj-card .sname { display: flex; align-items: center; gap: 10px; }
 .subj-card .sname h3 { font-size: 20px; font-weight: 800; }
 .swatch { width: 14px; height: 14px; border-radius: 4px; background: var(--sc); flex: none; }
-.subj-card .grade { display: flex; align-items: baseline; gap: 8px; }
+.subj-card .grade { display: flex; align-items: baseline; gap: 4px 8px; flex-wrap: wrap; }
+.subj-card .grade > span { white-space: nowrap; }
 .subj-card .grade b { font-family: var(--f-mono); font-size: 30px; line-height: 1; }
 .subj-card .meta { display: flex; justify-content: space-between; font-size: 14px; color: var(--ink-2); gap: 8px; flex-wrap: wrap; }
 .subj-hero { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }

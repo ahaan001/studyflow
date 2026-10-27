@@ -561,7 +561,8 @@
     const done = list.filter((a) => a.status !== "upcoming" && a.max > 0 && a.score !== "" && a.score != null);
     const upcoming = list.filter((a) => a.status === "upcoming");
     const anyW = list.some((a) => Number(a.weight) > 0);
-    const w = (a) => (anyW ? Number(a.weight) || 0 : 1);
+    // With no weightings anywhere, marks count by size (total marks), as in A* Planner's marks mode.
+    const w = (a) => (anyW ? Number(a.weight) || 0 : Number(a.max) || 0);
     const pct = (a) => (Number(a.score) / Number(a.max)) * 100;
     const wDone = done.reduce((s, a) => s + w(a), 0);
     const wUp = upcoming.reduce((s, a) => s + w(a), 0);
@@ -1087,6 +1088,260 @@
     award(20, "Planned session: Biology revision", "ex8", 1);
     s.meta.achievements = [{ id: "first-session", t: D(-6) }, { id: "streak-3", t: D(-4) }];
     return s;
+  };
+
+  // ---------- letter grades ----------
+  SF.sortedGrades = (grades) => (Array.isArray(grades) ? grades : [])
+    .filter((g) => g && String(g.name || "").trim() && isFinite(Number(g.min)))
+    .map((g) => ({ name: String(g.name).trim(), min: Number(g.min), max: g.max == null || g.max === "" ? null : Number(g.max) }))
+    .sort((a, b) => b.min - a.min);
+  SF.letterFor = (pct, grades) => {
+    if (pct == null || !isFinite(pct)) return null;
+    for (const g of SF.sortedGrades(grades)) if (pct >= g.min - 1e-9) return g.name;
+    return null;
+  };
+
+  // ---------- subject name matching ----------
+  SF.normSubject = (name) => String(name || "").toLowerCase()
+    .replace(/&/g, " and ").replace(/\b(igcse|gcse|cambridge|ib|cbse|icse|syllabus|course|subject|grade|year|level|hl|sl|core|extended)\b/g, " ")
+    .replace(/\(.*?\)/g, " ").replace(/\b\d{3,4}\b/g, " ")
+    .replace(/mathematics|maths/g, "math").replace(/\bstudies\b/g, "").replace(/\blit\b/g, "literature").replace(/\blang\b/g, "language")
+    .replace(/\bphysical education\b/g, "pe").replace(/\bcomputer science\b/g, "computerscience").replace(/\bglobal perspectives?\b/g, "globalperspectives")
+    .replace(/[^a-z0-9]+/g, "");
+  SF.findSubjectByName = (name, subjects) => {
+    const n = SF.normSubject(name);
+    if (!n) return null;
+    let hit = subjects.find((s) => SF.normSubject(s.name) === n);
+    if (hit) return hit;
+    hit = subjects.find((s) => { const m = SF.normSubject(s.name); return m.length >= 3 && n.length >= 3 && (m.startsWith(n) || n.startsWith(m)); });
+    if (hit) return hit;
+    const words = String(name).trim().split(/\s+/);
+    if (words.length === 1) return SF.matchSubject(words[0], subjects);
+    return null;
+  };
+
+  // ---------- A* Planner import ----------
+  SF.isAstarState = (x) => !!(x && typeof x === "object" && Array.isArray(x.subjects) && (Array.isArray(x.assessments) || Array.isArray(x.upcoming)) && x.subjects.every((s) => s && ("grades" in s || "target" in s)));
+  SF.unwrapAstar = (raw) => {
+    if (!raw || typeof raw !== "object") return null;
+    if (raw.state && SF.isAstarState(raw.state)) return raw.state;
+    return SF.isAstarState(raw) ? raw : null;
+  };
+  SF.astarPlan = (astar, state) => {
+    const subs = (astar.subjects || []).filter((s) => s && s.name);
+    return subs.map((a) => {
+      const nA = (astar.assessments || []).filter((x) => x.subjectId === a.id).length;
+      const nU = (astar.upcoming || []).filter((x) => x.subjectId === a.id).length;
+      const match = SF.findSubjectByName(a.name, state.subjects) || (a.code ? SF.findSubjectByName(a.code, state.subjects) : null);
+      const target = match ? match.id : nA || nU ? "new" : "skip";
+      return { astarId: a.id, name: a.name, code: a.code || "", nA, nU, target };
+    });
+  };
+  SF.applyAstar = (state, astar, plan, opts, today) => {
+    opts = Object.assign({ grades: true, upcoming: true, exams: true, boundaries: true }, opts || {});
+    today = today || SF.today();
+    const out = { subjects: 0, assessments: 0, upcoming: 0, exams: 0, skipped: 0 };
+    const used = new Set(state.subjects.map((s) => s.color));
+    const nextColor = () => { const c = SF.SUBJECT_COLORS.find((x) => !used.has(x)) || SF.SUBJECT_COLORS[state.subjects.length % SF.SUBJECT_COLORS.length]; used.add(c); return c; };
+    const have = new Set(state.assessments.map((a) => a.srcId).filter(Boolean).concat(state.exams.map((e) => e.srcId).filter(Boolean)));
+    for (const row of plan) {
+      if (!row.target || row.target === "skip") continue;
+      const a = (astar.subjects || []).find((s) => s.id === row.astarId);
+      if (!a) continue;
+      let sub;
+      if (row.target === "new") sub = SF.findSubjectByName(a.name, state.subjects);
+      if (row.target === "new" && !sub) {
+        sub = { id: SF.uid(), name: String(a.name).trim().slice(0, 60), color: nextColor(), kind: SF.guessKind(a.name), target: null, chapters: [] };
+        state.subjects.push(sub);
+        out.subjects++;
+      } else if (row.target !== "new") sub = state.subjects.find((s) => s.id === row.target);
+      if (!sub) continue;
+      if (opts.boundaries) {
+        const gs = SF.sortedGrades(a.grades);
+        if (gs.length) {
+          sub.grades = gs;
+          const t = gs.find((g) => g.name === String(a.target)) || gs[0];
+          sub.target = t.min;
+        }
+      }
+      const marksMode = a.mode === "marks";
+      const wOf = (x) => (marksMode ? "" : x.weight == null || x.weight === "" || !isFinite(Number(x.weight)) ? "" : Number(x.weight));
+      if (opts.grades) for (const x of (astar.assessments || []).filter((x) => x.subjectId === a.id)) {
+        const src = "astar:" + x.id;
+        if (have.has(src)) { out.skipped++; continue; }
+        have.add(src);
+        state.assessments.push({ id: SF.uid(), subjectId: sub.id, title: String(x.name || "Assessment").slice(0, 80), date: /^\d{4}-\d{2}-\d{2}$/.test(x.date || "") ? x.date : "", score: Number(x.obtained) || 0, max: Number(x.max) || 1, weight: wOf(x), status: "done", srcId: src });
+        out.assessments++;
+      }
+      for (const x of (astar.upcoming || []).filter((x) => x.subjectId === a.id)) {
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(x.date || "") ? x.date : "";
+        if (opts.upcoming) {
+          const src = "astar-up:" + x.id;
+          if (!have.has(src)) {
+            have.add(src);
+            state.assessments.push({ id: SF.uid(), subjectId: sub.id, title: String(x.name || "Upcoming test").slice(0, 80), date, score: "", max: Number(x.max) || 1, weight: wOf(x), status: "upcoming", srcId: src });
+            out.upcoming++;
+          } else out.skipped++;
+        }
+        if (opts.exams && date && date >= today) {
+          const src = "astar-exam:" + x.id;
+          if (!have.has(src)) {
+            have.add(src);
+            state.exams.push({ id: SF.uid(), subjectId: sub.id, title: String(x.name || sub.name + " test").slice(0, 80), date, topicIds: [], createdAt: today, srcId: src });
+            out.exams++;
+          }
+        }
+      }
+    }
+    return out;
+  };
+
+  // ---------- whole-syllabus parser ----------
+  const CMD_VERB = /^(describe|explain|state|define|identify|calculate|use|investigate|interpret|recall|know|understand|recogni[sz]e|compare|outline|draw|name|list|discuss|evaluate|anal[ys][sz]e|show|sketch|determine|demonstrate|apply|suggest|predict|plot|measure|convert|derive|deduce|construct|write|read|solve|find|be able|candidates|students|learners)\b/i;
+  const NOISE = /^(core|supplement|supplementary|extended|notes?( and guidance)?|guidance|learning (objectives?|outcomes?)|objectives?|content|subject content|assessment objectives?|key concepts?|overview|contents|page \d+|\d+|topics?|syllabus|scheme of work|term \d+|week \d+)[:.]?$/i;
+  const GENERIC = /\b(syllabus|topics?|curriculum|term|grade|year|overview|content|portion|portions|course|outline|igcse|gcse|cambridge|ib|cbse|icse|cie|edexcel|aqa|subject|paper|\d{3,4}|[0-9]+(st|nd|rd|th)?)\b/gi;
+  SF.COMMON_SUBJECTS = ["English", "English Language", "English Literature", "First Language English", "English as a Second Language", "Mathematics", "Additional Mathematics", "Further Mathematics", "Statistics",
+    "Biology", "Chemistry", "Physics", "Science", "Combined Science", "Co-ordinated Sciences", "Environmental Management", "Environmental Science", "Agriculture",
+    "History", "Geography", "Economics", "Business Studies", "Accounting", "Sociology", "Psychology", "Political Science", "Civics", "Social Studies", "Global Perspectives", "Thinking Skills",
+    "Computer Science", "ICT", "Information Technology", "Design and Technology", "Art and Design", "Art", "Music", "Drama", "Physical Education", "PE", "Media Studies", "Travel and Tourism",
+    "Hindi", "Marathi", "Sanskrit", "Gujarati", "Tamil", "Urdu", "French", "German", "Spanish", "Mandarin", "Chinese", "Japanese", "Arabic", "Italian", "Latin",
+    "Religious Studies", "Moral Education", "Robotics", "Student Wellbeing", "Life Skills", "Theory of Knowledge"];
+  SF.parseSyllabus = (text, subjects, presets) => {
+    presets = (presets || []).concat(SF.COMMON_SUBJECTS);
+    const lines = String(text || "").replace(/\r/g, "").split("\n").map((l) => l.replace(/\t/g, " ").replace(/\s+/g, " ").trim()).filter(Boolean);
+    const subjectOf = (line) => {
+      if (line.length > 70) return null;
+      let core = line.replace(/^(subject|course)\s*[:\-–]\s*/i, "").replace(/[:\-–|]+\s*$/, "").replace(/\(.*?\)/g, " ");
+      core = core.replace(GENERIC, " ").replace(/[^A-Za-z&+ ]/g, " ").replace(/\s+/g, " ").trim();
+      if (!core || core.split(" ").length > 4) return null;
+      const n = SF.normSubject(core);
+      if (!n) return null;
+      const hit = subjects.find((s) => SF.normSubject(s.name) === n);
+      if (hit) return { subjectId: hit.id, name: hit.name };
+      const words = core.split(" ");
+      if (words.length === 1) { const m = SF.matchSubject(words[0], subjects); if (m && SF.normSubject(m.name).startsWith(n.slice(0, 3))) return { subjectId: m.id, name: m.name }; }
+      const pre = presets.find((p) => SF.normSubject(p) === n);
+      if (pre) return { subjectId: null, name: pre };
+      return null;
+    };
+    const sections = [];
+    let sec = null, ch = null, ignored = 0;
+    const newSec = (info, heading) => { sec = { heading, subjectId: info ? info.subjectId : null, guess: info ? info.name : null, chapters: [] }; sections.push(sec); ch = null; };
+    const newCh = (name) => { ch = { name: name.slice(0, 80), topics: [], depths: [] }; sec.chapters.push(ch); };
+    const addTopic = (name, depth) => {
+      if (!sec) newSec(null, null);
+      if (!ch) newCh("Topics");
+      name = name.replace(/[:;.,]+$/, "").trim().slice(0, 100);
+      if (!name || ch.topics.some((t) => t.toLowerCase() === name.toLowerCase())) return;
+      ch.topics.push(name);
+      ch.depths.push(depth || 2);
+    };
+    for (const raw of lines) {
+      const isMdHeading = /^#{1,6}\s/.test(raw);
+      const line = raw.replace(/^[#>]+\s*/, "").replace(/^\*\*(.+)\*\*$/, "$1");
+      const subj = subjectOf(line);
+      if (subj) { newSec(subj, line); continue; }
+      if (!line.replace(GENERIC, " ").replace(/[^A-Za-z]/g, "")) { ignored++; continue; }
+      if (isMdHeading) { if (!sec) newSec(null, null); newCh(line.replace(/[:.]+$/, "")); continue; }
+      if (NOISE.test(line) || /^(https?:|www\.)/i.test(line) || /^©/.test(line)) { ignored++; continue; }
+      let m;
+      // Chapter: "Unit 3: Forces", "Chapter 2 - Cells", "Topic 4 Enzymes"
+      if ((m = line.match(/^(unit|chapter|topic|module|section|theme|strand|part)\s*([0-9]+|[ivxlc]+|[a-z])\b\s*[:.\-–)]?\s*(.*)$/i))) {
+        if (!sec) newSec(null, null);
+        newCh((m[3] || line).trim() || line);
+        continue;
+      }
+      // Topic: "1.2 Diffusion", "1.2.3 ..."
+      if ((m = line.match(/^(\d{1,2}(?:\.\d{1,2})+)[.)]?\s+(.+)$/))) {
+        const body = m[2];
+        if (CMD_VERB.test(body) || body.split(" ").length > 14) { ignored++; continue; }
+        addTopic(body, m[1].split(".").length);
+        continue;
+      }
+      // Chapter: "1 Cells", "2. Enzymes"
+      if ((m = line.match(/^(\d{1,2})[.)]?\s+(.+)$/))) {
+        const body = m[2];
+        if (CMD_VERB.test(body) || body.split(" ").length > 12) { ignored++; continue; }
+        if (!sec) newSec(null, null);
+        newCh(body.replace(/[:.]+$/, ""));
+        continue;
+      }
+      // Bullets and lettered items are topics
+      if ((m = line.match(/^(?:[-•*▪◦●○·–]|\(?[a-z]\)|[a-z]\.)\s+(.+)$/i))) {
+        const body = m[1];
+        if (CMD_VERB.test(body) || body.split(" ").length > 14) { ignored++; continue; }
+        addTopic(body, 2);
+        continue;
+      }
+      // "Heading:" or ALL CAPS line -> chapter
+      if (/:$/.test(line) && line.split(" ").length <= 8) {
+        if (!sec) newSec(null, null);
+        newCh(line.replace(/:$/, ""));
+        continue;
+      }
+      if (/^[A-Z0-9 &,'()\-]{4,60}$/.test(line) && /[A-Z]{3}/.test(line)) {
+        if (!sec) newSec(null, null);
+        newCh(line.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase()));
+        continue;
+      }
+      if (CMD_VERB.test(line) || line.split(" ").length > 14) { ignored++; continue; }
+      addTopic(line, 2);
+    }
+    // Tidy: prefer x.y topics over deeper x.y.z when both exist; handle empty chapters.
+    for (const s of sections) {
+      for (const c of s.chapters) {
+        if (c.depths.some((d) => d === 2) && c.depths.some((d) => d > 2)) {
+          c.topics = c.topics.filter((_, i) => c.depths[i] <= 2);
+        }
+        delete c.depths;
+      }
+      const empty = s.chapters.filter((c) => !c.topics.length);
+      if (empty.length && empty.length === s.chapters.length) {
+        s.chapters = [{ name: "Syllabus", topics: empty.map((c) => c.name) }];
+      } else {
+        for (const c of empty) c.topics = [c.name];
+      }
+    }
+    // Merge sections that point at the same subject; drop empty ones.
+    const merged = [];
+    for (const s of sections) {
+      if (!s.chapters.length) continue;
+      const key = s.subjectId || (s.guess ? "new:" + s.guess : null);
+      const prev = key && merged.find((x) => (x.subjectId || (x.guess ? "new:" + x.guess : null)) === key);
+      if (prev) prev.chapters.push(...s.chapters);
+      else merged.push(s);
+    }
+    return { sections: merged, ignored };
+  };
+  SF.applySyllabus = (state, sections) => {
+    const out = { subjects: 0, chapters: 0, topics: 0 };
+    const used = new Set(state.subjects.map((s) => s.color));
+    for (const s of sections) {
+      if (!s.target || s.target === "skip") continue;
+      let sub;
+      if (String(s.target).startsWith("new:")) {
+        const name = s.target.slice(4).trim() || "New subject";
+        sub = SF.findSubjectByName(name, state.subjects);
+        if (!sub) {
+          const color = SF.SUBJECT_COLORS.find((x) => !used.has(x)) || SF.SUBJECT_COLORS[state.subjects.length % SF.SUBJECT_COLORS.length];
+          used.add(color);
+          sub = { id: SF.uid(), name: name.slice(0, 60), color, kind: SF.guessKind(name), target: 80, chapters: [] };
+          state.subjects.push(sub);
+          out.subjects++;
+        }
+      } else sub = state.subjects.find((x) => x.id === s.target);
+      if (!sub) continue;
+      for (const c of s.chapters) {
+        let ch = sub.chapters.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
+        if (!ch) { ch = { id: SF.uid(), name: c.name, topics: [] }; sub.chapters.push(ch); out.chapters++; }
+        for (const t of c.topics) {
+          if (ch.topics.some((x) => x.name.toLowerCase() === t.toLowerCase())) continue;
+          ch.topics.push({ id: SF.uid(), name: t, status: "ns", confidence: 0 });
+          out.topics++;
+        }
+      }
+    }
+    return out;
   };
 
   root.SF = SF;

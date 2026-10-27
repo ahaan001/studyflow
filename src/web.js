@@ -145,6 +145,15 @@ const Web = {
     if (Store.mode === "offline") this.scheduleRetry();
   },
 
+  // A* Planner shares this Supabase project; its data sits in public.planners (one row per account, readable by its owner).
+  async fetchAstar() {
+    if (!S.auth || !S.auth.user) return null;
+    const { data, error } = await this.sb.from("planners").select("state").eq("user_id", S.auth.user.id).maybeSingle();
+    if (error || !data || !data.state) return null;
+    const a = SF.unwrapAstar(data.state);
+    return a && (a.assessments.length || a.upcoming.length || a.subjects.length) ? a : null;
+  },
+
   scheduleRetry() {
     clearTimeout(this.retryTimer);
     this.retryTimer = setTimeout(() => this.reconnect(), 20000);

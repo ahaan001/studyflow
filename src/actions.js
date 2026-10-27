@@ -1384,7 +1384,7 @@ ACT["onb-pick"] = (el) => {
 };
 ACT["onb-confirm-subjects"] = () => {
   const o = onbState();
-  if (!o.picked.length) return;
+  if (!o.picked.length && !st().subjects.length) return;
   o.confirmed = true;
   render();
 };
@@ -1421,9 +1421,15 @@ ACT["onb-del-act"] = (el) => { S.ui.onb.acts.splice(Number(el.dataset.i), 1); re
 ACT["onb-finish"] = () => {
   const o = S.ui.onb;
   const s = st();
-  if (!o.confirmed || !o.picked.length) return;
+  if (!o.confirmed || !(o.picked.length || s.subjects.length)) return;
+  const used = new Set(s.subjects.map((x) => x.color));
   PRESET_SUBJECTS.filter((x) => o.picked.includes(x)).concat(o.picked.filter((x) => !PRESET_SUBJECTS.includes(x)))
-    .forEach((name, i) => s.subjects.push({ id: SF.uid(), name, color: COLORS[i % COLORS.length], kind: SF.guessKind(name), target: 80, chapters: [] }));
+    .filter((name) => !SF.findSubjectByName(name, s.subjects))
+    .forEach((name, i) => {
+      const color = COLORS.find((c) => !used.has(c)) || COLORS[(s.subjects.length + i) % COLORS.length];
+      used.add(color);
+      s.subjects.push({ id: SF.uid(), name, color, kind: SF.guessKind(name), target: 80, chapters: [] });
+    });
   for (const d of [0, 1, 2, 3, 4, 5, 6]) s.meta.settings.days[d] = Object.assign({}, o.days[d]);
   s.meta.activities = o.acts;
   s.meta.onboarded = true;
@@ -1531,3 +1537,179 @@ ACT["clear-example"] = () => { wipe(); toast("Example data cleared."); };
 ACT["reset-ask"] = () => { S.ui.confirmReset = true; render(); };
 ACT["reset-cancel"] = () => { S.ui.confirmReset = false; render(); };
 ACT["reset-all"] = () => { wipe(); toast("Everything was deleted."); };
+
+// ---------- A* Planner import ----------
+ACT["import-astar"] = async () => {
+  const d = { stage: "find", astar: null, plan: null, error: "", opts: { grades: true, upcoming: true, exams: true, boundaries: true } };
+  openModal({ title: "Import from A* Planner", wide: true, data: d, render: astarHTML });
+  if (window.SF_WEB && typeof Web !== "undefined" && Web.fetchAstar) {
+    d.stage = "loading";
+    renderModal();
+    const found = await Web.fetchAstar().catch(() => null);
+    if (!S.modal || S.modal.data !== d) return;
+    if (found) {
+      d.found = true;
+      astarReady(d, found);
+    } else {
+      d.stage = "find";
+      d.none = true;
+    }
+    renderModal();
+  }
+};
+function astarReady(d, astar) {
+  d.astar = astar;
+  d.plan = SF.astarPlan(astar, st());
+  d.stage = "preview";
+  d.error = "";
+}
+function astarHTML(d) {
+  if (d.stage === "loading") return `<div class="sheet-body"><div class="empty"><span class="spin" style="width:28px;height:28px"></span><p>Looking for your A* Planner data…</p></div></div>`;
+  if (d.stage === "preview") {
+    const s = st();
+    const totals = d.plan.reduce((a, r) => (r.target !== "skip" ? { a: a.a + r.nA, u: a.u + r.nU } : a), { a: 0, u: 0 });
+    const opt = (r) => `<option value="new" ${r.target === "new" ? "selected" : ""}>Create "${esc(r.name)}"</option>${s.subjects.map((x) => `<option value="${esc(x.id)}" ${r.target === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}<option value="skip" ${r.target === "skip" ? "selected" : ""}>Skip</option>`;
+    return `<form data-form="astar-apply"><div class="sheet-body">
+      ${d.found ? `<div class="alert info">${icon("check")}<div>Found the A* Planner data saved to this account.</div></div>` : ""}
+      <p class="muted">Check where each A* Planner subject should go. Matching names are paired up already. Importing twice won't create duplicates.</p>
+      <div class="stack-sm">${d.plan.map((r, i) => `<div class="between" style="border:1.5px solid var(--line);border-radius:var(--r);padding:12px 14px">
+          <div style="min-width:0"><b>${esc(r.name)}</b>${r.code ? ` <span class="tag">${esc(r.code)}</span>` : ""}<div class="small muted">${plural(r.nA, "grade")}, ${plural(r.nU, "upcoming test")}</div></div>
+          <label class="row-flex small" style="gap:8px;flex-wrap:nowrap;max-width:100%"><span class="muted">Put into</span><select class="input sm" style="width:auto;max-width:220px" id="as-map-${i}" data-change="astar-map" data-i="${i}" aria-label="Where to put ${esc(r.name)}">${opt(r)}</select></label></div>`).join("")}</div>
+      <div class="stack-sm">
+        <label class="check"><input type="checkbox" name="grades" ${d.opts.grades ? "checked" : ""}><span>Marked grades <span class="muted small" id="as-na">(${totals.a})</span></span></label>
+        <label class="check"><input type="checkbox" name="upcoming" ${d.opts.upcoming ? "checked" : ""}><span>Upcoming tests in each subject's grade calculator <span class="muted small" id="as-nu">(${totals.u})</span></span></label>
+        <label class="check"><input type="checkbox" name="exams" ${d.opts.exams ? "checked" : ""}><span>Add future tests to the revision plan, so topics get scheduled before them</span></label>
+        <label class="check"><input type="checkbox" name="boundaries" ${d.opts.boundaries ? "checked" : ""}><span>Grade boundaries and target grades (shows letter grades like A* next to percentages)</span></label>
+      </div>
+      ${d.error ? `<div class="alert crit">${icon("alert")}<div>${esc(d.error)}</div></div>` : ""}
+    </div><div class="sheet-foot"><button type="button" class="btn" data-act="astar-back">Use a different file</button><button class="btn primary" type="submit">Import</button></div></form>`;
+  }
+  return `<form data-form="astar-read"><div class="sheet-body">
+    ${d.none ? `<div class="alert info">${icon("alert")}<div>There's no A* Planner data saved to this account. If you used A* Planner with a different email, sign in to StudyFlow with that email instead, or use a backup below.</div></div>` : ""}
+    <p><b>Get a backup from A* Planner:</b> open A* Planner → <b>Settings</b> → <b>Export</b>, then either download the file or copy the text.</p>
+    <div class="drop">${icon("upload")}<span>Upload the backup file</span><label class="btn sm" for="as-file">Choose file</label><input type="file" id="as-file" class="sr" accept="application/json,.json,.txt" data-change="astar-file"></div>
+    <label class="field"><span>Or paste the backup text</span><textarea class="input mono" name="text" id="as-text" style="min-height:140px;font-size:13px" placeholder='{"version": 2, "subjects": [ ... ]}'></textarea></label>
+    ${d.error ? `<div class="alert crit">${icon("alert")}<div>${esc(d.error)}</div></div>` : ""}
+  </div><div class="sheet-foot"><button type="button" class="btn" data-act="close-modal">Cancel</button><button class="btn primary" type="submit">Read backup</button></div></form>`;
+}
+function astarParse(text) {
+  let obj = null;
+  try { obj = JSON.parse(String(text || "").trim()); } catch (e) { return null; }
+  return SF.unwrapAstar(obj);
+}
+FORM["astar-read"] = (fd) => {
+  const d = S.modal.data;
+  const a = astarParse(fd.get("text"));
+  if (!a) { d.error = "That doesn't look like an A* Planner backup. Copy the whole text from A* Planner's Export box."; return renderModal(); }
+  astarReady(d, a);
+  renderModal();
+};
+CHG["astar-file"] = (el) => {
+  const f = el.files && el.files[0];
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    const d = S.modal && S.modal.data;
+    if (!d) return;
+    const a = astarParse(rd.result);
+    if (!a) { d.error = "That file isn't an A* Planner backup. In A* Planner, use Settings → Export → Download."; return renderModal(); }
+    astarReady(d, a);
+    renderModal();
+  };
+  rd.readAsText(f);
+};
+CHG["astar-map"] = (el) => {
+  const d = S.modal.data;
+  d.plan[Number(el.dataset.i)].target = el.value;
+  const live = d.plan.filter((r) => r.target !== "skip");
+  $("#as-na").textContent = `(${live.reduce((a, r) => a + r.nA, 0)})`;
+  $("#as-nu").textContent = `(${live.reduce((a, r) => a + r.nU, 0)})`;
+};
+ACT["astar-back"] = () => { const d = S.modal.data; d.stage = "find"; d.found = false; d.none = false; d.error = ""; renderModal(); };
+FORM["astar-apply"] = (fd) => {
+  const d = S.modal.data;
+  d.opts = { grades: !!fd.get("grades"), upcoming: !!fd.get("upcoming"), exams: !!fd.get("exams"), boundaries: !!fd.get("boundaries") };
+  if (!d.plan.some((r) => r.target !== "skip")) { d.error = "Every subject is set to Skip. Pick where at least one should go."; return renderModal(); }
+  const s = st();
+  const out = SF.applyAstar(s, d.astar, d.plan, d.opts, SF.today());
+  const inOnb = !s.meta.onboarded && afterImportOnb();
+  closeModal();
+  const parts = [];
+  if (out.subjects) parts.push(plural(out.subjects, "new subject"));
+  if (out.assessments) parts.push(plural(out.assessments, "grade"));
+  if (out.upcoming) parts.push(plural(out.upcoming, "upcoming test"));
+  if (out.exams) parts.push(`${plural(out.exams, "test")} in your revision plan`);
+  toast((parts.length ? `Imported ${parts.join(", ")}.` : out.skipped ? "Everything here was already imported." : "Nothing to import for those subjects.") + (inOnb ? " Now set when you can study." : ""), "", 5000);
+  if (!inOnb) S.ui.view = "subjects";
+  commit("subjects", "assessments", "exams");
+};
+
+// During first-time setup, imported subjects count as confirmed and the student carries on to study times.
+function afterImportOnb() {
+  if (!st().subjects.length) return false;
+  const o = onbState();
+  o.imported = true;
+  o.confirmed = true;
+  setTimeout(() => { const el = $$(".onb-step")[1]; if (el) el.scrollIntoView({ block: "start" }); }, 60);
+  return true;
+}
+
+// ---------- whole-syllabus paste ----------
+ACT["paste-syllabus"] = () => {
+  openModal({ title: "Paste your whole syllabus", wide: true, data: { stage: "input", text: "", sections: [] }, render: syllabusHTML });
+};
+function syllabusHTML(d) {
+  if (d.stage === "preview") {
+    const s = st();
+    const total = d.sections.filter((x) => x.target !== "skip").reduce((a, x) => a + x.chapters.reduce((b, c) => b + c.topics.length, 0), 0);
+    const opt = (x) => `${x.guess && !x.subjectId ? `<option value="new:${esc(x.guess)}" ${x.target === "new:" + x.guess ? "selected" : ""}>Create "${esc(x.guess)}"</option>` : ""}${s.subjects.map((y) => `<option value="${esc(y.id)}" ${x.target === y.id ? "selected" : ""}>${esc(y.name)}</option>`).join("")}<option value="skip" ${x.target === "skip" ? "selected" : ""}>Skip this part</option>`;
+    return `<form data-form="syllabus-apply"><div class="sheet-body">
+      <p class="muted">Found ${plural(d.sections.length, "part")}. Check the subject for each one; anything without a clear subject heading is set to Skip until you pick one. Existing topics aren't duplicated.</p>
+      ${d.ignored ? `<p class="small faint">Left out ${plural(d.ignored, "line")} that read like learning objectives, page labels or notes ("Describe…", "Core", "Page 3").</p>` : ""}
+      <div class="stack-sm">${d.sections.map((x, i) => {
+        const nT = x.chapters.reduce((a, c) => a + c.topics.length, 0);
+        return `<div class="panel" style="box-shadow:none;border:1.5px solid var(--line);padding:14px">
+          <div class="between"><div style="min-width:0"><b>${esc(x.heading || "No subject heading")}</b><div class="small muted">${plural(x.chapters.length, "chapter")}, ${plural(nT, "topic")}</div></div>
+          <select class="input sm" style="width:auto;max-width:100%" id="sy-map-${i}" data-change="syllabus-map" data-i="${i}" aria-label="Subject for this part">${opt(x)}</select></div>
+          <details style="margin-top:8px"><summary class="small" style="cursor:pointer;font-weight:700">Show topics</summary>
+            <div class="stack-sm" style="margin-top:8px">${x.chapters.map((c) => `<div class="small"><b>${esc(c.name)}</b><div class="muted">${c.topics.map(esc).join(" · ")}</div></div>`).join("")}</div></details>
+        </div>`;
+      }).join("")}</div>
+    </div><div class="sheet-foot"><button type="button" class="btn" data-act="syllabus-back">Edit text</button><button class="btn primary" type="submit" id="sy-go" ${total ? "" : "disabled"}>Add ${plural(total, "topic")}</button></div></form>`;
+  }
+  return `<form data-form="syllabus-read"><div class="sheet-body">
+    <p class="muted">Paste the syllabus for all your subjects at once, straight from the school document or website. StudyFlow splits it by subject heading (like <b>Biology</b> or <b>Chemistry (0620)</b>), then into chapters and topics. You'll check it before anything is added.</p>
+    <label class="field"><span>Syllabus</span><textarea class="input" name="text" id="sy-text" style="min-height:260px;font-family:var(--f-mono);font-size:13px" placeholder="Biology&#10;Unit 1: Cells&#10;- Cell structure&#10;- Diffusion and osmosis&#10;&#10;Chemistry&#10;1 Atomic structure&#10;2 The periodic table" autofocus>${esc(d.text || "")}</textarea></label>
+    ${d.error ? `<div class="alert crit">${icon("alert")}<div>${esc(d.error)}</div></div>` : ""}
+  </div><div class="sheet-foot"><button type="button" class="btn" data-act="close-modal">Cancel</button><button class="btn primary" type="submit">Split into subjects</button></div></form>`;
+}
+FORM["syllabus-read"] = (fd) => {
+  const d = S.modal.data;
+  d.text = String(fd.get("text") || "");
+  if (!d.text.trim()) { d.error = "Paste the syllabus first."; return renderModal(); }
+  const r = SF.parseSyllabus(d.text, st().subjects, PRESET_SUBJECTS);
+  if (!r.sections.length) { d.error = "Couldn't find any topics in that text. Put each topic on its own line."; return renderModal(); }
+  d.sections = r.sections.map((x) => Object.assign(x, { target: x.subjectId || (x.guess ? "new:" + x.guess : "skip") }));
+  d.ignored = r.ignored;
+  d.error = "";
+  d.stage = "preview";
+  renderModal();
+};
+CHG["syllabus-map"] = (el) => {
+  const d = S.modal.data;
+  d.sections[Number(el.dataset.i)].target = el.value;
+  const total = d.sections.filter((x) => x.target !== "skip").reduce((a, x) => a + x.chapters.reduce((b, c) => b + c.topics.length, 0), 0);
+  const b = $("#sy-go");
+  b.textContent = `Add ${plural(total, "topic")}`;
+  b.disabled = !total;
+};
+ACT["syllabus-back"] = () => { S.modal.data.stage = "input"; renderModal(); };
+FORM["syllabus-apply"] = () => {
+  const d = S.modal.data;
+  const out = SF.applySyllabus(st(), d.sections);
+  closeModal();
+  const inOnb = !st().meta.onboarded && afterImportOnb();
+  toast(out.topics ? `Added ${plural(out.topics, "topic")}${out.subjects ? ` and ${plural(out.subjects, "new subject")}` : ""}.${inOnb ? " Now set when you can study." : " Set how confident you feel in each one."}` : "Those topics were already there.", "", 5000);
+  if (!inOnb) S.ui.view = "subjects";
+  commit("subjects");
+};

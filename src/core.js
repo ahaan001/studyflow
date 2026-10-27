@@ -505,7 +505,7 @@ function go(view, extra) {
 function render(bg) {
   keepFocus(() => {
     const s = S.state;
-    const needOnb = !s.meta.onboarded && !SF.hasData(s);
+    const needOnb = !s.meta.onboarded && (!SF.hasData(s) || !!(S.ui.onb && S.ui.onb.imported));
     const view = needOnb ? "onboarding" : S.ui.view;
     const navView = { subject: "subjects", task: "assignments", settings: "progress" }[view] || view;
     $$("[data-nav]").forEach((b) => b.setAttribute("aria-current", b.dataset.nav === navView && !needOnb ? "page" : "false"));

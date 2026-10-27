@@ -332,7 +332,8 @@ textarea.input { min-height: 96px; resize: vertical; line-height: 1.5; }
 .subj-card .sname { display: flex; align-items: center; gap: 10px; }
 .subj-card .sname h3 { font-size: 20px; font-weight: 800; }
 .swatch { width: 14px; height: 14px; border-radius: 4px; background: var(--sc); flex: none; }
-.subj-card .grade { display: flex; align-items: baseline; gap: 8px; }
+.subj-card .grade { display: flex; align-items: baseline; gap: 4px 8px; flex-wrap: wrap; }
+.subj-card .grade > span { white-space: nowrap; }
 .subj-card .grade b { font-family: var(--f-mono); font-size: 30px; line-height: 1; }
 .subj-card .meta { display: flex; justify-content: space-between; font-size: 14px; color: var(--ink-2); gap: 8px; flex-wrap: wrap; }
 .subj-hero { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
@@ -1215,7 +1216,8 @@ window.SF_WEB = true;
     const done = list.filter((a) => a.status !== "upcoming" && a.max > 0 && a.score !== "" && a.score != null);
     const upcoming = list.filter((a) => a.status === "upcoming");
     const anyW = list.some((a) => Number(a.weight) > 0);
-    const w = (a) => (anyW ? Number(a.weight) || 0 : 1);
+    // With no weightings anywhere, marks count by size (total marks), as in A* Planner's marks mode.
+    const w = (a) => (anyW ? Number(a.weight) || 0 : Number(a.max) || 0);
     const pct = (a) => (Number(a.score) / Number(a.max)) * 100;
     const wDone = done.reduce((s, a) => s + w(a), 0);
     const wUp = upcoming.reduce((s, a) => s + w(a), 0);
@@ -1743,6 +1745,260 @@ window.SF_WEB = true;
     return s;
   };
 
+  // ---------- letter grades ----------
+  SF.sortedGrades = (grades) => (Array.isArray(grades) ? grades : [])
+    .filter((g) => g && String(g.name || "").trim() && isFinite(Number(g.min)))
+    .map((g) => ({ name: String(g.name).trim(), min: Number(g.min), max: g.max == null || g.max === "" ? null : Number(g.max) }))
+    .sort((a, b) => b.min - a.min);
+  SF.letterFor = (pct, grades) => {
+    if (pct == null || !isFinite(pct)) return null;
+    for (const g of SF.sortedGrades(grades)) if (pct >= g.min - 1e-9) return g.name;
+    return null;
+  };
+
+  // ---------- subject name matching ----------
+  SF.normSubject = (name) => String(name || "").toLowerCase()
+    .replace(/&/g, " and ").replace(/\b(igcse|gcse|cambridge|ib|cbse|icse|syllabus|course|subject|grade|year|level|hl|sl|core|extended)\b/g, " ")
+    .replace(/\(.*?\)/g, " ").replace(/\b\d{3,4}\b/g, " ")
+    .replace(/mathematics|maths/g, "math").replace(/\bstudies\b/g, "").replace(/\blit\b/g, "literature").replace(/\blang\b/g, "language")
+    .replace(/\bphysical education\b/g, "pe").replace(/\bcomputer science\b/g, "computerscience").replace(/\bglobal perspectives?\b/g, "globalperspectives")
+    .replace(/[^a-z0-9]+/g, "");
+  SF.findSubjectByName = (name, subjects) => {
+    const n = SF.normSubject(name);
+    if (!n) return null;
+    let hit = subjects.find((s) => SF.normSubject(s.name) === n);
+    if (hit) return hit;
+    hit = subjects.find((s) => { const m = SF.normSubject(s.name); return m.length >= 3 && n.length >= 3 && (m.startsWith(n) || n.startsWith(m)); });
+    if (hit) return hit;
+    const words = String(name).trim().split(/\s+/);
+    if (words.length === 1) return SF.matchSubject(words[0], subjects);
+    return null;
+  };
+
+  // ---------- A* Planner import ----------
+  SF.isAstarState = (x) => !!(x && typeof x === "object" && Array.isArray(x.subjects) && (Array.isArray(x.assessments) || Array.isArray(x.upcoming)) && x.subjects.every((s) => s && ("grades" in s || "target" in s)));
+  SF.unwrapAstar = (raw) => {
+    if (!raw || typeof raw !== "object") return null;
+    if (raw.state && SF.isAstarState(raw.state)) return raw.state;
+    return SF.isAstarState(raw) ? raw : null;
+  };
+  SF.astarPlan = (astar, state) => {
+    const subs = (astar.subjects || []).filter((s) => s && s.name);
+    return subs.map((a) => {
+      const nA = (astar.assessments || []).filter((x) => x.subjectId === a.id).length;
+      const nU = (astar.upcoming || []).filter((x) => x.subjectId === a.id).length;
+      const match = SF.findSubjectByName(a.name, state.subjects) || (a.code ? SF.findSubjectByName(a.code, state.subjects) : null);
+      const target = match ? match.id : nA || nU ? "new" : "skip";
+      return { astarId: a.id, name: a.name, code: a.code || "", nA, nU, target };
+    });
+  };
+  SF.applyAstar = (state, astar, plan, opts, today) => {
+    opts = Object.assign({ grades: true, upcoming: true, exams: true, boundaries: true }, opts || {});
+    today = today || SF.today();
+    const out = { subjects: 0, assessments: 0, upcoming: 0, exams: 0, skipped: 0 };
+    const used = new Set(state.subjects.map((s) => s.color));
+    const nextColor = () => { const c = SF.SUBJECT_COLORS.find((x) => !used.has(x)) || SF.SUBJECT_COLORS[state.subjects.length % SF.SUBJECT_COLORS.length]; used.add(c); return c; };
+    const have = new Set(state.assessments.map((a) => a.srcId).filter(Boolean).concat(state.exams.map((e) => e.srcId).filter(Boolean)));
+    for (const row of plan) {
+      if (!row.target || row.target === "skip") continue;
+      const a = (astar.subjects || []).find((s) => s.id === row.astarId);
+      if (!a) continue;
+      let sub;
+      if (row.target === "new") sub = SF.findSubjectByName(a.name, state.subjects);
+      if (row.target === "new" && !sub) {
+        sub = { id: SF.uid(), name: String(a.name).trim().slice(0, 60), color: nextColor(), kind: SF.guessKind(a.name), target: null, chapters: [] };
+        state.subjects.push(sub);
+        out.subjects++;
+      } else if (row.target !== "new") sub = state.subjects.find((s) => s.id === row.target);
+      if (!sub) continue;
+      if (opts.boundaries) {
+        const gs = SF.sortedGrades(a.grades);
+        if (gs.length) {
+          sub.grades = gs;
+          const t = gs.find((g) => g.name === String(a.target)) || gs[0];
+          sub.target = t.min;
+        }
+      }
+      const marksMode = a.mode === "marks";
+      const wOf = (x) => (marksMode ? "" : x.weight == null || x.weight === "" || !isFinite(Number(x.weight)) ? "" : Number(x.weight));
+      if (opts.grades) for (const x of (astar.assessments || []).filter((x) => x.subjectId === a.id)) {
+        const src = "astar:" + x.id;
+        if (have.has(src)) { out.skipped++; continue; }
+        have.add(src);
+        state.assessments.push({ id: SF.uid(), subjectId: sub.id, title: String(x.name || "Assessment").slice(0, 80), date: /^\d{4}-\d{2}-\d{2}$/.test(x.date || "") ? x.date : "", score: Number(x.obtained) || 0, max: Number(x.max) || 1, weight: wOf(x), status: "done", srcId: src });
+        out.assessments++;
+      }
+      for (const x of (astar.upcoming || []).filter((x) => x.subjectId === a.id)) {
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(x.date || "") ? x.date : "";
+        if (opts.upcoming) {
+          const src = "astar-up:" + x.id;
+          if (!have.has(src)) {
+            have.add(src);
+            state.assessments.push({ id: SF.uid(), subjectId: sub.id, title: String(x.name || "Upcoming test").slice(0, 80), date, score: "", max: Number(x.max) || 1, weight: wOf(x), status: "upcoming", srcId: src });
+            out.upcoming++;
+          } else out.skipped++;
+        }
+        if (opts.exams && date && date >= today) {
+          const src = "astar-exam:" + x.id;
+          if (!have.has(src)) {
+            have.add(src);
+            state.exams.push({ id: SF.uid(), subjectId: sub.id, title: String(x.name || sub.name + " test").slice(0, 80), date, topicIds: [], createdAt: today, srcId: src });
+            out.exams++;
+          }
+        }
+      }
+    }
+    return out;
+  };
+
+  // ---------- whole-syllabus parser ----------
+  const CMD_VERB = /^(describe|explain|state|define|identify|calculate|use|investigate|interpret|recall|know|understand|recogni[sz]e|compare|outline|draw|name|list|discuss|evaluate|anal[ys][sz]e|show|sketch|determine|demonstrate|apply|suggest|predict|plot|measure|convert|derive|deduce|construct|write|read|solve|find|be able|candidates|students|learners)\b/i;
+  const NOISE = /^(core|supplement|supplementary|extended|notes?( and guidance)?|guidance|learning (objectives?|outcomes?)|objectives?|content|subject content|assessment objectives?|key concepts?|overview|contents|page \d+|\d+|topics?|syllabus|scheme of work|term \d+|week \d+)[:.]?$/i;
+  const GENERIC = /\b(syllabus|topics?|curriculum|term|grade|year|overview|content|portion|portions|course|outline|igcse|gcse|cambridge|ib|cbse|icse|cie|edexcel|aqa|subject|paper|\d{3,4}|[0-9]+(st|nd|rd|th)?)\b/gi;
+  SF.COMMON_SUBJECTS = ["English", "English Language", "English Literature", "First Language English", "English as a Second Language", "Mathematics", "Additional Mathematics", "Further Mathematics", "Statistics",
+    "Biology", "Chemistry", "Physics", "Science", "Combined Science", "Co-ordinated Sciences", "Environmental Management", "Environmental Science", "Agriculture",
+    "History", "Geography", "Economics", "Business Studies", "Accounting", "Sociology", "Psychology", "Political Science", "Civics", "Social Studies", "Global Perspectives", "Thinking Skills",
+    "Computer Science", "ICT", "Information Technology", "Design and Technology", "Art and Design", "Art", "Music", "Drama", "Physical Education", "PE", "Media Studies", "Travel and Tourism",
+    "Hindi", "Marathi", "Sanskrit", "Gujarati", "Tamil", "Urdu", "French", "German", "Spanish", "Mandarin", "Chinese", "Japanese", "Arabic", "Italian", "Latin",
+    "Religious Studies", "Moral Education", "Robotics", "Student Wellbeing", "Life Skills", "Theory of Knowledge"];
+  SF.parseSyllabus = (text, subjects, presets) => {
+    presets = (presets || []).concat(SF.COMMON_SUBJECTS);
+    const lines = String(text || "").replace(/\r/g, "").split("\n").map((l) => l.replace(/\t/g, " ").replace(/\s+/g, " ").trim()).filter(Boolean);
+    const subjectOf = (line) => {
+      if (line.length > 70) return null;
+      let core = line.replace(/^(subject|course)\s*[:\-–]\s*/i, "").replace(/[:\-–|]+\s*$/, "").replace(/\(.*?\)/g, " ");
+      core = core.replace(GENERIC, " ").replace(/[^A-Za-z&+ ]/g, " ").replace(/\s+/g, " ").trim();
+      if (!core || core.split(" ").length > 4) return null;
+      const n = SF.normSubject(core);
+      if (!n) return null;
+      const hit = subjects.find((s) => SF.normSubject(s.name) === n);
+      if (hit) return { subjectId: hit.id, name: hit.name };
+      const words = core.split(" ");
+      if (words.length === 1) { const m = SF.matchSubject(words[0], subjects); if (m && SF.normSubject(m.name).startsWith(n.slice(0, 3))) return { subjectId: m.id, name: m.name }; }
+      const pre = presets.find((p) => SF.normSubject(p) === n);
+      if (pre) return { subjectId: null, name: pre };
+      return null;
+    };
+    const sections = [];
+    let sec = null, ch = null, ignored = 0;
+    const newSec = (info, heading) => { sec = { heading, subjectId: info ? info.subjectId : null, guess: info ? info.name : null, chapters: [] }; sections.push(sec); ch = null; };
+    const newCh = (name) => { ch = { name: name.slice(0, 80), topics: [], depths: [] }; sec.chapters.push(ch); };
+    const addTopic = (name, depth) => {
+      if (!sec) newSec(null, null);
+      if (!ch) newCh("Topics");
+      name = name.replace(/[:;.,]+$/, "").trim().slice(0, 100);
+      if (!name || ch.topics.some((t) => t.toLowerCase() === name.toLowerCase())) return;
+      ch.topics.push(name);
+      ch.depths.push(depth || 2);
+    };
+    for (const raw of lines) {
+      const isMdHeading = /^#{1,6}\s/.test(raw);
+      const line = raw.replace(/^[#>]+\s*/, "").replace(/^\*\*(.+)\*\*$/, "$1");
+      const subj = subjectOf(line);
+      if (subj) { newSec(subj, line); continue; }
+      if (!line.replace(GENERIC, " ").replace(/[^A-Za-z]/g, "")) { ignored++; continue; }
+      if (isMdHeading) { if (!sec) newSec(null, null); newCh(line.replace(/[:.]+$/, "")); continue; }
+      if (NOISE.test(line) || /^(https?:|www\.)/i.test(line) || /^©/.test(line)) { ignored++; continue; }
+      let m;
+      // Chapter: "Unit 3: Forces", "Chapter 2 - Cells", "Topic 4 Enzymes"
+      if ((m = line.match(/^(unit|chapter|topic|module|section|theme|strand|part)\s*([0-9]+|[ivxlc]+|[a-z])\b\s*[:.\-–)]?\s*(.*)$/i))) {
+        if (!sec) newSec(null, null);
+        newCh((m[3] || line).trim() || line);
+        continue;
+      }
+      // Topic: "1.2 Diffusion", "1.2.3 ..."
+      if ((m = line.match(/^(\d{1,2}(?:\.\d{1,2})+)[.)]?\s+(.+)$/))) {
+        const body = m[2];
+        if (CMD_VERB.test(body) || body.split(" ").length > 14) { ignored++; continue; }
+        addTopic(body, m[1].split(".").length);
+        continue;
+      }
+      // Chapter: "1 Cells", "2. Enzymes"
+      if ((m = line.match(/^(\d{1,2})[.)]?\s+(.+)$/))) {
+        const body = m[2];
+        if (CMD_VERB.test(body) || body.split(" ").length > 12) { ignored++; continue; }
+        if (!sec) newSec(null, null);
+        newCh(body.replace(/[:.]+$/, ""));
+        continue;
+      }
+      // Bullets and lettered items are topics
+      if ((m = line.match(/^(?:[-•*▪◦●○·–]|\(?[a-z]\)|[a-z]\.)\s+(.+)$/i))) {
+        const body = m[1];
+        if (CMD_VERB.test(body) || body.split(" ").length > 14) { ignored++; continue; }
+        addTopic(body, 2);
+        continue;
+      }
+      // "Heading:" or ALL CAPS line -> chapter
+      if (/:$/.test(line) && line.split(" ").length <= 8) {
+        if (!sec) newSec(null, null);
+        newCh(line.replace(/:$/, ""));
+        continue;
+      }
+      if (/^[A-Z0-9 &,'()\-]{4,60}$/.test(line) && /[A-Z]{3}/.test(line)) {
+        if (!sec) newSec(null, null);
+        newCh(line.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase()));
+        continue;
+      }
+      if (CMD_VERB.test(line) || line.split(" ").length > 14) { ignored++; continue; }
+      addTopic(line, 2);
+    }
+    // Tidy: prefer x.y topics over deeper x.y.z when both exist; handle empty chapters.
+    for (const s of sections) {
+      for (const c of s.chapters) {
+        if (c.depths.some((d) => d === 2) && c.depths.some((d) => d > 2)) {
+          c.topics = c.topics.filter((_, i) => c.depths[i] <= 2);
+        }
+        delete c.depths;
+      }
+      const empty = s.chapters.filter((c) => !c.topics.length);
+      if (empty.length && empty.length === s.chapters.length) {
+        s.chapters = [{ name: "Syllabus", topics: empty.map((c) => c.name) }];
+      } else {
+        for (const c of empty) c.topics = [c.name];
+      }
+    }
+    // Merge sections that point at the same subject; drop empty ones.
+    const merged = [];
+    for (const s of sections) {
+      if (!s.chapters.length) continue;
+      const key = s.subjectId || (s.guess ? "new:" + s.guess : null);
+      const prev = key && merged.find((x) => (x.subjectId || (x.guess ? "new:" + x.guess : null)) === key);
+      if (prev) prev.chapters.push(...s.chapters);
+      else merged.push(s);
+    }
+    return { sections: merged, ignored };
+  };
+  SF.applySyllabus = (state, sections) => {
+    const out = { subjects: 0, chapters: 0, topics: 0 };
+    const used = new Set(state.subjects.map((s) => s.color));
+    for (const s of sections) {
+      if (!s.target || s.target === "skip") continue;
+      let sub;
+      if (String(s.target).startsWith("new:")) {
+        const name = s.target.slice(4).trim() || "New subject";
+        sub = SF.findSubjectByName(name, state.subjects);
+        if (!sub) {
+          const color = SF.SUBJECT_COLORS.find((x) => !used.has(x)) || SF.SUBJECT_COLORS[state.subjects.length % SF.SUBJECT_COLORS.length];
+          used.add(color);
+          sub = { id: SF.uid(), name: name.slice(0, 60), color, kind: SF.guessKind(name), target: 80, chapters: [] };
+          state.subjects.push(sub);
+          out.subjects++;
+        }
+      } else sub = state.subjects.find((x) => x.id === s.target);
+      if (!sub) continue;
+      for (const c of s.chapters) {
+        let ch = sub.chapters.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
+        if (!ch) { ch = { id: SF.uid(), name: c.name, topics: [] }; sub.chapters.push(ch); out.chapters++; }
+        for (const t of c.topics) {
+          if (ch.topics.some((x) => x.name.toLowerCase() === t.toLowerCase())) continue;
+          ch.topics.push({ id: SF.uid(), name: t, status: "ns", confidence: 0 });
+          out.topics++;
+        }
+      }
+    }
+    return out;
+  };
+
   root.SF = SF;
   if (typeof module !== "undefined") module.exports = SF;
 })(typeof window !== "undefined" ? window : globalThis);
@@ -2254,7 +2510,7 @@ function go(view, extra) {
 function render(bg) {
   keepFocus(() => {
     const s = S.state;
-    const needOnb = !s.meta.onboarded && !SF.hasData(s);
+    const needOnb = !s.meta.onboarded && (!SF.hasData(s) || !!(S.ui.onb && S.ui.onb.imported));
     const view = needOnb ? "onboarding" : S.ui.view;
     const navView = { subject: "subjects", task: "assignments", settings: "progress" }[view] || view;
     $$("[data-nav]").forEach((b) => b.setAttribute("aria-current", b.dataset.nav === navView && !needOnb ? "page" : "false"));
@@ -2382,12 +2638,14 @@ function onbState() {
 }
 V.onboarding = () => {
   const o = onbState();
-  const n = o.picked.length;
-  const ordered = PRESET_SUBJECTS.filter((x) => o.picked.includes(x));
+  const have = st().subjects.map((x) => x.name);
+  const ordered = PRESET_SUBJECTS.filter((x) => o.picked.includes(x)).concat(o.picked.filter((x) => !PRESET_SUBJECTS.includes(x)));
+  const all = have.concat(ordered.filter((x) => !SF.findSubjectByName(x, st().subjects)));
+  const n = all.length;
   const step1 = o.confirmed
-    ? `<div class="stack-sm"><div class="between"><h2 class="row-flex">${icon("check")}${plural(n, "subject")} confirmed</h2><button type="button" class="btn sm" data-act="onb-edit-subjects">Change</button></div>
-        <p class="muted">${ordered.map(esc).join(", ")}</p></div>`
-    : `<div><h2>Which subjects do you take?</h2><p class="muted">Tap every subject and activity on your timetable, then confirm.</p></div>
+    ? `<div class="stack-sm"><div class="between"><h2 class="row-flex">${icon("check")}${plural(n, "subject")} confirmed</h2><button type="button" class="btn sm" data-act="onb-edit-subjects">${have.length ? "Add more" : "Change"}</button></div>
+        <p class="muted">${all.map(esc).join(", ")}</p></div>`
+    : `<div><h2>Which subjects do you take?</h2><p class="muted">Tap every subject and activity on your timetable, then confirm.</p>${have.length ? `<p class="small">Already added: <b>${have.map(esc).join(", ")}</b></p>` : ""}</div>
       ${SUBJECT_GROUPS.map(([g, list]) => `<div class="stack-sm"><div class="eyebrow">${esc(g)}</div><div class="pickchips">${list.map((x) => `<button type="button" data-act="onb-pick" data-name="${esc(x)}" aria-pressed="${o.picked.includes(x)}">${esc(x)}</button>`).join("")}</div></div>`).join("")}
       <div class="between" style="border-top:1px solid var(--line);padding-top:14px"><span class="muted">${n ? `${plural(n, "subject")} selected` : "Nothing selected yet"}</span>
         <button type="button" class="btn primary" data-act="onb-confirm-subjects" ${n ? "" : "disabled"}>${icon("check", "ico-sm")}Confirm subjects</button></div>`;
@@ -2417,7 +2675,7 @@ V.onboarding = () => {
       ${activityForm("onb-act")}
     </div></div>
     <div class="between">
-      <button type="button" class="btn ghost" data-act="load-example">Explore with example data first</button>
+      <div class="row-flex"><button type="button" class="btn" data-act="import-astar">${icon("upload", "ico-sm")}Import from A* Planner</button><button type="button" class="btn ghost" data-act="load-example">Explore with example data first</button></div>
       <button type="button" class="btn primary" data-act="onb-finish" ${o.confirmed && n ? "" : "disabled"}>${o.confirmed && n ? `Start with ${plural(n, "subject")}` : "Confirm your subjects first"}${icon("arrow")}</button>
     </div>
   </div>`;
@@ -2629,7 +2887,7 @@ function taskProgress(t) {
 // ---------- subjects ----------
 V.subjects = () => {
   const s = st(), P = plan(), idx = P.idx, today = SF.today();
-  if (!s.subjects.length) return `<div class="page-head"><div><h1>Subjects</h1></div></div><div class="panel empty"><h3>No subjects yet</h3><p>Add the subjects you take to start tracking topics and grades.</p><button type="button" class="btn primary" data-act="add-subject">${icon("plus")}Add subject</button></div>`;
+  if (!s.subjects.length) return `<div class="page-head"><div><h1>Subjects</h1></div></div><div class="panel empty"><h3>No subjects yet</h3><p>Add the subjects you take, bring them over from A* Planner, or paste your syllabus.</p><div class="row-flex" style="justify-content:center"><button type="button" class="btn" data-act="import-astar">${icon("upload", "ico-sm")}Import from A* Planner</button><button type="button" class="btn" data-act="paste-syllabus">${icon("note", "ico-sm")}Paste whole syllabus</button><button type="button" class="btn primary" data-act="add-subject">${icon("plus")}Add subject</button></div></div>`;
   const cards = s.subjects.map((sub) => {
     const g = SF.gradeSummary(s, sub.id);
     const topics = SF.subjectTopics(sub);
@@ -2640,12 +2898,12 @@ V.subjects = () => {
     const seg = Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<i class="s-${k}" style="width:${(n / topics.length) * 100}%" title="${SF.STATE_LABEL[k]}: ${n}"></i>`).join("");
     return `<button type="button" class="subj-card" data-sc="${esc(sub.color)}" data-act="open-subject" data-id="${esc(sub.id)}">
       <div class="sname"><span class="swatch"></span><h3>${esc(sub.name)}</h3></div>
-      <div class="grade"><b>${g.avg == null ? "–" : Math.round(g.avg) + "%"}</b><span class="muted small">${g.target ? `target ${g.target}%` : "no target set"}</span>${g.verdict ? `<span class="pill ${{ secured: "good", realistic: "good", open: "info", stretch: "warn", hard: "crit", impossible: "crit" }[g.verdict.key]}">${g.verdict.label}</span>` : ""}</div>
+      <div class="grade"><b>${g.avg == null ? "–" : Math.round(g.avg) + "%"}</b>${SF.letterFor(g.avg, sub.grades) ? `<span class="pill info">${esc(SF.letterFor(g.avg, sub.grades))}</span>` : ""}<span class="muted small">${g.target ? `target ${SF.letterFor(g.target, sub.grades) ? esc(SF.letterFor(g.target, sub.grades)) + " · " : ""}${g.target}%` : "no target set"}</span>${g.verdict ? `<span class="pill ${{ secured: "good", realistic: "good", open: "info", stretch: "warn", hard: "crit", impossible: "crit" }[g.verdict.key]}">${g.verdict.label}</span>` : ""}</div>
       <div class="stack-sm" style="gap:6px"><div class="bar" aria-hidden="true">${seg || ""}</div><div class="meta"><span>${counts.mastered + counts.good} of ${topics.length} topics understood</span>${counts.weak ? `<span style="color:var(--crit);font-weight:700">${counts.weak} weak</span>` : ""}</div></div>
       <div class="meta"><span>${nextEx ? `${icon("target", "ico-sm")} ${esc(nextEx.title.replace(sub.name, "").trim() || "Test")} ${esc(relLow(nextEx.date))}` : nextT ? `Next: ${esc(nextT.title.length > 30 ? nextT.title.slice(0, 28) + "…" : nextT.title)}` : "Nothing due"}</span></div>
     </button>`;
   }).join("");
-  return `<div class="page-head"><div><h1>Subjects</h1><p class="sub">Syllabus, grades, notes and how to study each one.</p></div><button type="button" class="btn primary" data-act="add-subject">${icon("plus")}Add subject</button></div>
+  return `<div class="page-head"><div><h1>Subjects</h1><p class="sub">Syllabus, grades, notes and how to study each one.</p></div><div class="row-flex"><button type="button" class="btn" data-act="import-astar">${icon("upload", "ico-sm")}Import from A* Planner</button><button type="button" class="btn" data-act="paste-syllabus">${icon("note", "ico-sm")}Paste whole syllabus</button><button type="button" class="btn primary" data-act="add-subject">${icon("plus")}Add subject</button></div></div>
     <div class="subj-grid">${cards}</div>`;
 };
 
@@ -2705,7 +2963,7 @@ function subjectGradesHTML(sub) {
     const p = !up && a.max ? (a.score / a.max) * 100 : null;
     return `<tr><td><b>${esc(a.title)}</b></td><td class="muted small">${a.date ? SF.fmtDay(a.date) : "–"}</td>
       <td class="num mono">${up ? `<span class="pill">Upcoming</span>` : `${esc(a.score)}/${esc(a.max)}`}</td><td class="num mono">${p == null ? "" : Math.round(p) + "%"}</td>
-      <td class="num mono">${g.anyW ? (Number(a.weight) || 0) + "%" : "equal"}</td>
+      <td class="num mono">${g.anyW ? (Number(a.weight) || 0) + "%" : "by marks"}</td>
       <td class="num"><button type="button" class="btn ghost xs" data-act="edit-assessment" data-id="${esc(a.id)}" aria-label="Edit ${esc(a.title)}">${icon("edit", "ico-sm")}</button></td></tr>`;
   }).join("");
   const vcls = g.verdict ? { secured: "good", realistic: "good", open: "info", stretch: "warn", hard: "crit", impossible: "crit" }[g.verdict.key] : "";
@@ -2717,9 +2975,9 @@ function subjectGradesHTML(sub) {
   else explain = `To finish on ${g.target}%, you need an average of ${pct(g.needed)} across the remaining ${g.anyW ? g.wUp + "% of the grade" : plural(g.upcoming.length, "assessment")}.${g.avg != null ? ` You're averaging ${pct(g.avg)} so far, so that's ${{ realistic: "realistic", stretch: "a stretch", hard: "very hard", open: "doable" }[g.verdict.key] || g.verdict.label.toLowerCase()}.` : ""}`;
   return `<div class="stack" style="gap:20px">
     <section class="panel"><div class="panel-head"><h2>Target calculator</h2>
-      <label class="row-flex small"><span class="label">Target</span><input class="input sm mono" style="width:84px" type="number" min="0" max="100" id="tg-${esc(sub.id)}" data-change="subject-target" data-id="${esc(sub.id)}" value="${g.target ?? ""}" aria-label="Target grade percent"><span>%</span></label></div>
+      <label class="row-flex small"><span class="label">Target</span><input class="input sm mono" style="width:84px" type="number" min="0" max="100" id="tg-${esc(sub.id)}" data-change="subject-target" data-id="${esc(sub.id)}" value="${g.target ?? ""}" aria-label="Target grade percent"><span>%</span>${SF.letterFor(g.target, sub.grades) ? `<span class="pill info">${esc(SF.letterFor(g.target, sub.grades))}</span>` : ""}</label></div>
       <div class="calc">
-        <div class="stat"><span>Current weighted grade</span><b>${pct(g.avg)}</b></div>
+        <div class="stat"><span>Current ${g.anyW ? "weighted" : "overall"} grade</span><b>${pct(g.avg)}${SF.letterFor(g.avg, sub.grades) ? ` <span style="font-size:18px">${esc(SF.letterFor(g.avg, sub.grades))}</span>` : ""}</b></div>
         <div class="stat hl"><span>Needed on what's left</span><b>${g.needed == null ? "–" : g.needed <= 0 ? "0%" : pct(g.needed)}</b></div>
         <div class="stat"><span>Best possible finish</span><b>${g.maxPossible == null ? pct(g.avg) : pct(g.maxPossible)}</b></div>
         <div class="stat"><span>Since last assessment</span><b>${g.delta == null ? "–" : (g.delta >= 0 ? "+" : "") + Math.round(g.delta) + "%"}</b></div>
@@ -3161,6 +3419,7 @@ V.settings = () => {
         <div class="stack-sm">
           <div class="row-flex"><span id="save-state-2" class="save-state ${Store.status === "local" || Store.status === "offline" ? "local" : Store.status === "error" ? "err" : ""}"><i></i></span><span>${window.SF_WEB ? (Store.mode === "offline" ? "You're offline. Changes stay on this device and sync to your account when you reconnect." : "Saved to your StudyFlow account. Only you can see it, on any device where you sign in.") : Store.mode === "cloud" ? "Saved to your Claude account. Only you can see it, on any device where you open this page." : "Saved in this browser only. It stays on this device, and clearing site data erases it, so keep a backup."}</span></div>
           ${window.SF_WEB ? "" : `<div class="row-flex"><span class="pill ${AI.on() ? "good" : ""}">${icon("ai", "ico-sm")}${AI.on() ? "AI features on" : AI.denied ? "AI declined" : "AI unavailable here"}</span><span class="small muted">${AI.on() ? "Claude runs on your own account and asks permission the first time." : AI.denied ? "Reload the page to be asked again." : "Open this page in Claude to use AI features."}</span></div>`}
+          <div class="row-flex" style="margin-top:8px"><button type="button" class="btn" data-act="import-astar">${icon("upload", "ico-sm")}Import from A* Planner</button><button type="button" class="btn" data-act="paste-syllabus">${icon("note", "ico-sm")}Paste whole syllabus</button></div>
           <div class="row-flex" style="margin-top:8px"><button type="button" class="btn" data-act="backup">${icon("download", "ico-sm")}Download a backup</button>
             <label class="btn" for="restore-file">${icon("upload", "ico-sm")}Restore from backup</label><input id="restore-file" type="file" accept="application/json,.json" data-change="restore" class="sr"></div>
           ${s.meta.isExample ? `<button type="button" class="btn" data-act="clear-example">Clear example data</button>` : !SF.hasData(s) ? `<button type="button" class="btn" data-act="load-example">Load example data</button>` : ""}
@@ -4555,7 +4814,7 @@ ACT["onb-pick"] = (el) => {
 };
 ACT["onb-confirm-subjects"] = () => {
   const o = onbState();
-  if (!o.picked.length) return;
+  if (!o.picked.length && !st().subjects.length) return;
   o.confirmed = true;
   render();
 };
@@ -4592,9 +4851,15 @@ ACT["onb-del-act"] = (el) => { S.ui.onb.acts.splice(Number(el.dataset.i), 1); re
 ACT["onb-finish"] = () => {
   const o = S.ui.onb;
   const s = st();
-  if (!o.confirmed || !o.picked.length) return;
+  if (!o.confirmed || !(o.picked.length || s.subjects.length)) return;
+  const used = new Set(s.subjects.map((x) => x.color));
   PRESET_SUBJECTS.filter((x) => o.picked.includes(x)).concat(o.picked.filter((x) => !PRESET_SUBJECTS.includes(x)))
-    .forEach((name, i) => s.subjects.push({ id: SF.uid(), name, color: COLORS[i % COLORS.length], kind: SF.guessKind(name), target: 80, chapters: [] }));
+    .filter((name) => !SF.findSubjectByName(name, s.subjects))
+    .forEach((name, i) => {
+      const color = COLORS.find((c) => !used.has(c)) || COLORS[(s.subjects.length + i) % COLORS.length];
+      used.add(color);
+      s.subjects.push({ id: SF.uid(), name, color, kind: SF.guessKind(name), target: 80, chapters: [] });
+    });
   for (const d of [0, 1, 2, 3, 4, 5, 6]) s.meta.settings.days[d] = Object.assign({}, o.days[d]);
   s.meta.activities = o.acts;
   s.meta.onboarded = true;
@@ -4702,6 +4967,182 @@ ACT["clear-example"] = () => { wipe(); toast("Example data cleared."); };
 ACT["reset-ask"] = () => { S.ui.confirmReset = true; render(); };
 ACT["reset-cancel"] = () => { S.ui.confirmReset = false; render(); };
 ACT["reset-all"] = () => { wipe(); toast("Everything was deleted."); };
+
+// ---------- A* Planner import ----------
+ACT["import-astar"] = async () => {
+  const d = { stage: "find", astar: null, plan: null, error: "", opts: { grades: true, upcoming: true, exams: true, boundaries: true } };
+  openModal({ title: "Import from A* Planner", wide: true, data: d, render: astarHTML });
+  if (window.SF_WEB && typeof Web !== "undefined" && Web.fetchAstar) {
+    d.stage = "loading";
+    renderModal();
+    const found = await Web.fetchAstar().catch(() => null);
+    if (!S.modal || S.modal.data !== d) return;
+    if (found) {
+      d.found = true;
+      astarReady(d, found);
+    } else {
+      d.stage = "find";
+      d.none = true;
+    }
+    renderModal();
+  }
+};
+function astarReady(d, astar) {
+  d.astar = astar;
+  d.plan = SF.astarPlan(astar, st());
+  d.stage = "preview";
+  d.error = "";
+}
+function astarHTML(d) {
+  if (d.stage === "loading") return `<div class="sheet-body"><div class="empty"><span class="spin" style="width:28px;height:28px"></span><p>Looking for your A* Planner data…</p></div></div>`;
+  if (d.stage === "preview") {
+    const s = st();
+    const totals = d.plan.reduce((a, r) => (r.target !== "skip" ? { a: a.a + r.nA, u: a.u + r.nU } : a), { a: 0, u: 0 });
+    const opt = (r) => `<option value="new" ${r.target === "new" ? "selected" : ""}>Create "${esc(r.name)}"</option>${s.subjects.map((x) => `<option value="${esc(x.id)}" ${r.target === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}<option value="skip" ${r.target === "skip" ? "selected" : ""}>Skip</option>`;
+    return `<form data-form="astar-apply"><div class="sheet-body">
+      ${d.found ? `<div class="alert info">${icon("check")}<div>Found the A* Planner data saved to this account.</div></div>` : ""}
+      <p class="muted">Check where each A* Planner subject should go. Matching names are paired up already. Importing twice won't create duplicates.</p>
+      <div class="stack-sm">${d.plan.map((r, i) => `<div class="between" style="border:1.5px solid var(--line);border-radius:var(--r);padding:12px 14px">
+          <div style="min-width:0"><b>${esc(r.name)}</b>${r.code ? ` <span class="tag">${esc(r.code)}</span>` : ""}<div class="small muted">${plural(r.nA, "grade")}, ${plural(r.nU, "upcoming test")}</div></div>
+          <label class="row-flex small" style="gap:8px;flex-wrap:nowrap;max-width:100%"><span class="muted">Put into</span><select class="input sm" style="width:auto;max-width:220px" id="as-map-${i}" data-change="astar-map" data-i="${i}" aria-label="Where to put ${esc(r.name)}">${opt(r)}</select></label></div>`).join("")}</div>
+      <div class="stack-sm">
+        <label class="check"><input type="checkbox" name="grades" ${d.opts.grades ? "checked" : ""}><span>Marked grades <span class="muted small" id="as-na">(${totals.a})</span></span></label>
+        <label class="check"><input type="checkbox" name="upcoming" ${d.opts.upcoming ? "checked" : ""}><span>Upcoming tests in each subject's grade calculator <span class="muted small" id="as-nu">(${totals.u})</span></span></label>
+        <label class="check"><input type="checkbox" name="exams" ${d.opts.exams ? "checked" : ""}><span>Add future tests to the revision plan, so topics get scheduled before them</span></label>
+        <label class="check"><input type="checkbox" name="boundaries" ${d.opts.boundaries ? "checked" : ""}><span>Grade boundaries and target grades (shows letter grades like A* next to percentages)</span></label>
+      </div>
+      ${d.error ? `<div class="alert crit">${icon("alert")}<div>${esc(d.error)}</div></div>` : ""}
+    </div><div class="sheet-foot"><button type="button" class="btn" data-act="astar-back">Use a different file</button><button class="btn primary" type="submit">Import</button></div></form>`;
+  }
+  return `<form data-form="astar-read"><div class="sheet-body">
+    ${d.none ? `<div class="alert info">${icon("alert")}<div>There's no A* Planner data saved to this account. If you used A* Planner with a different email, sign in to StudyFlow with that email instead, or use a backup below.</div></div>` : ""}
+    <p><b>Get a backup from A* Planner:</b> open A* Planner → <b>Settings</b> → <b>Export</b>, then either download the file or copy the text.</p>
+    <div class="drop">${icon("upload")}<span>Upload the backup file</span><label class="btn sm" for="as-file">Choose file</label><input type="file" id="as-file" class="sr" accept="application/json,.json,.txt" data-change="astar-file"></div>
+    <label class="field"><span>Or paste the backup text</span><textarea class="input mono" name="text" id="as-text" style="min-height:140px;font-size:13px" placeholder='{"version": 2, "subjects": [ ... ]}'></textarea></label>
+    ${d.error ? `<div class="alert crit">${icon("alert")}<div>${esc(d.error)}</div></div>` : ""}
+  </div><div class="sheet-foot"><button type="button" class="btn" data-act="close-modal">Cancel</button><button class="btn primary" type="submit">Read backup</button></div></form>`;
+}
+function astarParse(text) {
+  let obj = null;
+  try { obj = JSON.parse(String(text || "").trim()); } catch (e) { return null; }
+  return SF.unwrapAstar(obj);
+}
+FORM["astar-read"] = (fd) => {
+  const d = S.modal.data;
+  const a = astarParse(fd.get("text"));
+  if (!a) { d.error = "That doesn't look like an A* Planner backup. Copy the whole text from A* Planner's Export box."; return renderModal(); }
+  astarReady(d, a);
+  renderModal();
+};
+CHG["astar-file"] = (el) => {
+  const f = el.files && el.files[0];
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    const d = S.modal && S.modal.data;
+    if (!d) return;
+    const a = astarParse(rd.result);
+    if (!a) { d.error = "That file isn't an A* Planner backup. In A* Planner, use Settings → Export → Download."; return renderModal(); }
+    astarReady(d, a);
+    renderModal();
+  };
+  rd.readAsText(f);
+};
+CHG["astar-map"] = (el) => {
+  const d = S.modal.data;
+  d.plan[Number(el.dataset.i)].target = el.value;
+  const live = d.plan.filter((r) => r.target !== "skip");
+  $("#as-na").textContent = `(${live.reduce((a, r) => a + r.nA, 0)})`;
+  $("#as-nu").textContent = `(${live.reduce((a, r) => a + r.nU, 0)})`;
+};
+ACT["astar-back"] = () => { const d = S.modal.data; d.stage = "find"; d.found = false; d.none = false; d.error = ""; renderModal(); };
+FORM["astar-apply"] = (fd) => {
+  const d = S.modal.data;
+  d.opts = { grades: !!fd.get("grades"), upcoming: !!fd.get("upcoming"), exams: !!fd.get("exams"), boundaries: !!fd.get("boundaries") };
+  if (!d.plan.some((r) => r.target !== "skip")) { d.error = "Every subject is set to Skip. Pick where at least one should go."; return renderModal(); }
+  const s = st();
+  const out = SF.applyAstar(s, d.astar, d.plan, d.opts, SF.today());
+  const inOnb = !s.meta.onboarded && afterImportOnb();
+  closeModal();
+  const parts = [];
+  if (out.subjects) parts.push(plural(out.subjects, "new subject"));
+  if (out.assessments) parts.push(plural(out.assessments, "grade"));
+  if (out.upcoming) parts.push(plural(out.upcoming, "upcoming test"));
+  if (out.exams) parts.push(`${plural(out.exams, "test")} in your revision plan`);
+  toast((parts.length ? `Imported ${parts.join(", ")}.` : out.skipped ? "Everything here was already imported." : "Nothing to import for those subjects.") + (inOnb ? " Now set when you can study." : ""), "", 5000);
+  if (!inOnb) S.ui.view = "subjects";
+  commit("subjects", "assessments", "exams");
+};
+
+// During first-time setup, imported subjects count as confirmed and the student carries on to study times.
+function afterImportOnb() {
+  if (!st().subjects.length) return false;
+  const o = onbState();
+  o.imported = true;
+  o.confirmed = true;
+  setTimeout(() => { const el = $$(".onb-step")[1]; if (el) el.scrollIntoView({ block: "start" }); }, 60);
+  return true;
+}
+
+// ---------- whole-syllabus paste ----------
+ACT["paste-syllabus"] = () => {
+  openModal({ title: "Paste your whole syllabus", wide: true, data: { stage: "input", text: "", sections: [] }, render: syllabusHTML });
+};
+function syllabusHTML(d) {
+  if (d.stage === "preview") {
+    const s = st();
+    const total = d.sections.filter((x) => x.target !== "skip").reduce((a, x) => a + x.chapters.reduce((b, c) => b + c.topics.length, 0), 0);
+    const opt = (x) => `${x.guess && !x.subjectId ? `<option value="new:${esc(x.guess)}" ${x.target === "new:" + x.guess ? "selected" : ""}>Create "${esc(x.guess)}"</option>` : ""}${s.subjects.map((y) => `<option value="${esc(y.id)}" ${x.target === y.id ? "selected" : ""}>${esc(y.name)}</option>`).join("")}<option value="skip" ${x.target === "skip" ? "selected" : ""}>Skip this part</option>`;
+    return `<form data-form="syllabus-apply"><div class="sheet-body">
+      <p class="muted">Found ${plural(d.sections.length, "part")}. Check the subject for each one; anything without a clear subject heading is set to Skip until you pick one. Existing topics aren't duplicated.</p>
+      ${d.ignored ? `<p class="small faint">Left out ${plural(d.ignored, "line")} that read like learning objectives, page labels or notes ("Describe…", "Core", "Page 3").</p>` : ""}
+      <div class="stack-sm">${d.sections.map((x, i) => {
+        const nT = x.chapters.reduce((a, c) => a + c.topics.length, 0);
+        return `<div class="panel" style="box-shadow:none;border:1.5px solid var(--line);padding:14px">
+          <div class="between"><div style="min-width:0"><b>${esc(x.heading || "No subject heading")}</b><div class="small muted">${plural(x.chapters.length, "chapter")}, ${plural(nT, "topic")}</div></div>
+          <select class="input sm" style="width:auto;max-width:100%" id="sy-map-${i}" data-change="syllabus-map" data-i="${i}" aria-label="Subject for this part">${opt(x)}</select></div>
+          <details style="margin-top:8px"><summary class="small" style="cursor:pointer;font-weight:700">Show topics</summary>
+            <div class="stack-sm" style="margin-top:8px">${x.chapters.map((c) => `<div class="small"><b>${esc(c.name)}</b><div class="muted">${c.topics.map(esc).join(" · ")}</div></div>`).join("")}</div></details>
+        </div>`;
+      }).join("")}</div>
+    </div><div class="sheet-foot"><button type="button" class="btn" data-act="syllabus-back">Edit text</button><button class="btn primary" type="submit" id="sy-go" ${total ? "" : "disabled"}>Add ${plural(total, "topic")}</button></div></form>`;
+  }
+  return `<form data-form="syllabus-read"><div class="sheet-body">
+    <p class="muted">Paste the syllabus for all your subjects at once, straight from the school document or website. StudyFlow splits it by subject heading (like <b>Biology</b> or <b>Chemistry (0620)</b>), then into chapters and topics. You'll check it before anything is added.</p>
+    <label class="field"><span>Syllabus</span><textarea class="input" name="text" id="sy-text" style="min-height:260px;font-family:var(--f-mono);font-size:13px" placeholder="Biology&#10;Unit 1: Cells&#10;- Cell structure&#10;- Diffusion and osmosis&#10;&#10;Chemistry&#10;1 Atomic structure&#10;2 The periodic table" autofocus>${esc(d.text || "")}</textarea></label>
+    ${d.error ? `<div class="alert crit">${icon("alert")}<div>${esc(d.error)}</div></div>` : ""}
+  </div><div class="sheet-foot"><button type="button" class="btn" data-act="close-modal">Cancel</button><button class="btn primary" type="submit">Split into subjects</button></div></form>`;
+}
+FORM["syllabus-read"] = (fd) => {
+  const d = S.modal.data;
+  d.text = String(fd.get("text") || "");
+  if (!d.text.trim()) { d.error = "Paste the syllabus first."; return renderModal(); }
+  const r = SF.parseSyllabus(d.text, st().subjects, PRESET_SUBJECTS);
+  if (!r.sections.length) { d.error = "Couldn't find any topics in that text. Put each topic on its own line."; return renderModal(); }
+  d.sections = r.sections.map((x) => Object.assign(x, { target: x.subjectId || (x.guess ? "new:" + x.guess : "skip") }));
+  d.ignored = r.ignored;
+  d.error = "";
+  d.stage = "preview";
+  renderModal();
+};
+CHG["syllabus-map"] = (el) => {
+  const d = S.modal.data;
+  d.sections[Number(el.dataset.i)].target = el.value;
+  const total = d.sections.filter((x) => x.target !== "skip").reduce((a, x) => a + x.chapters.reduce((b, c) => b + c.topics.length, 0), 0);
+  const b = $("#sy-go");
+  b.textContent = `Add ${plural(total, "topic")}`;
+  b.disabled = !total;
+};
+ACT["syllabus-back"] = () => { S.modal.data.stage = "input"; renderModal(); };
+FORM["syllabus-apply"] = () => {
+  const d = S.modal.data;
+  const out = SF.applySyllabus(st(), d.sections);
+  closeModal();
+  const inOnb = !st().meta.onboarded && afterImportOnb();
+  toast(out.topics ? `Added ${plural(out.topics, "topic")}${out.subjects ? ` and ${plural(out.subjects, "new subject")}` : ""}.${inOnb ? " Now set when you can study." : " Set how confident you feel in each one."}` : "Those topics were already there.", "", 5000);
+  if (!inOnb) S.ui.view = "subjects";
+  commit("subjects");
+};
 
 // ---------- StudyFlow web: accounts and cloud saving (Supabase) ----------
 const SUPABASE_URL = "https://fdjcufvtjkpyrbodkyfj.supabase.co";
@@ -4848,6 +5289,15 @@ const Web = {
     renderAuth();
     render();
     if (Store.mode === "offline") this.scheduleRetry();
+  },
+
+  // A* Planner shares this Supabase project; its data sits in public.planners (one row per account, readable by its owner).
+  async fetchAstar() {
+    if (!S.auth || !S.auth.user) return null;
+    const { data, error } = await this.sb.from("planners").select("state").eq("user_id", S.auth.user.id).maybeSingle();
+    if (error || !data || !data.state) return null;
+    const a = SF.unwrapAstar(data.state);
+    return a && (a.assessments.length || a.upcoming.length || a.subjects.length) ? a : null;
   },
 
   scheduleRetry() {

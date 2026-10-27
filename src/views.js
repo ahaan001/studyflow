@@ -101,12 +101,14 @@ function onbState() {
 }
 V.onboarding = () => {
   const o = onbState();
-  const n = o.picked.length;
-  const ordered = PRESET_SUBJECTS.filter((x) => o.picked.includes(x));
+  const have = st().subjects.map((x) => x.name);
+  const ordered = PRESET_SUBJECTS.filter((x) => o.picked.includes(x)).concat(o.picked.filter((x) => !PRESET_SUBJECTS.includes(x)));
+  const all = have.concat(ordered.filter((x) => !SF.findSubjectByName(x, st().subjects)));
+  const n = all.length;
   const step1 = o.confirmed
-    ? `<div class="stack-sm"><div class="between"><h2 class="row-flex">${icon("check")}${plural(n, "subject")} confirmed</h2><button type="button" class="btn sm" data-act="onb-edit-subjects">Change</button></div>
-        <p class="muted">${ordered.map(esc).join(", ")}</p></div>`
-    : `<div><h2>Which subjects do you take?</h2><p class="muted">Tap every subject and activity on your timetable, then confirm.</p></div>
+    ? `<div class="stack-sm"><div class="between"><h2 class="row-flex">${icon("check")}${plural(n, "subject")} confirmed</h2><button type="button" class="btn sm" data-act="onb-edit-subjects">${have.length ? "Add more" : "Change"}</button></div>
+        <p class="muted">${all.map(esc).join(", ")}</p></div>`
+    : `<div><h2>Which subjects do you take?</h2><p class="muted">Tap every subject and activity on your timetable, then confirm.</p>${have.length ? `<p class="small">Already added: <b>${have.map(esc).join(", ")}</b></p>` : ""}</div>
       ${SUBJECT_GROUPS.map(([g, list]) => `<div class="stack-sm"><div class="eyebrow">${esc(g)}</div><div class="pickchips">${list.map((x) => `<button type="button" data-act="onb-pick" data-name="${esc(x)}" aria-pressed="${o.picked.includes(x)}">${esc(x)}</button>`).join("")}</div></div>`).join("")}
       <div class="between" style="border-top:1px solid var(--line);padding-top:14px"><span class="muted">${n ? `${plural(n, "subject")} selected` : "Nothing selected yet"}</span>
         <button type="button" class="btn primary" data-act="onb-confirm-subjects" ${n ? "" : "disabled"}>${icon("check", "ico-sm")}Confirm subjects</button></div>`;
@@ -136,7 +138,7 @@ V.onboarding = () => {
       ${activityForm("onb-act")}
     </div></div>
     <div class="between">
-      <button type="button" class="btn ghost" data-act="load-example">Explore with example data first</button>
+      <div class="row-flex"><button type="button" class="btn" data-act="import-astar">${icon("upload", "ico-sm")}Import from A* Planner</button><button type="button" class="btn ghost" data-act="load-example">Explore with example data first</button></div>
       <button type="button" class="btn primary" data-act="onb-finish" ${o.confirmed && n ? "" : "disabled"}>${o.confirmed && n ? `Start with ${plural(n, "subject")}` : "Confirm your subjects first"}${icon("arrow")}</button>
     </div>
   </div>`;
@@ -348,7 +350,7 @@ function taskProgress(t) {
 // ---------- subjects ----------
 V.subjects = () => {
   const s = st(), P = plan(), idx = P.idx, today = SF.today();
-  if (!s.subjects.length) return `<div class="page-head"><div><h1>Subjects</h1></div></div><div class="panel empty"><h3>No subjects yet</h3><p>Add the subjects you take to start tracking topics and grades.</p><button type="button" class="btn primary" data-act="add-subject">${icon("plus")}Add subject</button></div>`;
+  if (!s.subjects.length) return `<div class="page-head"><div><h1>Subjects</h1></div></div><div class="panel empty"><h3>No subjects yet</h3><p>Add the subjects you take, bring them over from A* Planner, or paste your syllabus.</p><div class="row-flex" style="justify-content:center"><button type="button" class="btn" data-act="import-astar">${icon("upload", "ico-sm")}Import from A* Planner</button><button type="button" class="btn" data-act="paste-syllabus">${icon("note", "ico-sm")}Paste whole syllabus</button><button type="button" class="btn primary" data-act="add-subject">${icon("plus")}Add subject</button></div></div>`;
   const cards = s.subjects.map((sub) => {
     const g = SF.gradeSummary(s, sub.id);
     const topics = SF.subjectTopics(sub);
@@ -359,12 +361,12 @@ V.subjects = () => {
     const seg = Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<i class="s-${k}" style="width:${(n / topics.length) * 100}%" title="${SF.STATE_LABEL[k]}: ${n}"></i>`).join("");
     return `<button type="button" class="subj-card" data-sc="${esc(sub.color)}" data-act="open-subject" data-id="${esc(sub.id)}">
       <div class="sname"><span class="swatch"></span><h3>${esc(sub.name)}</h3></div>
-      <div class="grade"><b>${g.avg == null ? "–" : Math.round(g.avg) + "%"}</b><span class="muted small">${g.target ? `target ${g.target}%` : "no target set"}</span>${g.verdict ? `<span class="pill ${{ secured: "good", realistic: "good", open: "info", stretch: "warn", hard: "crit", impossible: "crit" }[g.verdict.key]}">${g.verdict.label}</span>` : ""}</div>
+      <div class="grade"><b>${g.avg == null ? "–" : Math.round(g.avg) + "%"}</b>${SF.letterFor(g.avg, sub.grades) ? `<span class="pill info">${esc(SF.letterFor(g.avg, sub.grades))}</span>` : ""}<span class="muted small">${g.target ? `target ${SF.letterFor(g.target, sub.grades) ? esc(SF.letterFor(g.target, sub.grades)) + " · " : ""}${g.target}%` : "no target set"}</span>${g.verdict ? `<span class="pill ${{ secured: "good", realistic: "good", open: "info", stretch: "warn", hard: "crit", impossible: "crit" }[g.verdict.key]}">${g.verdict.label}</span>` : ""}</div>
       <div class="stack-sm" style="gap:6px"><div class="bar" aria-hidden="true">${seg || ""}</div><div class="meta"><span>${counts.mastered + counts.good} of ${topics.length} topics understood</span>${counts.weak ? `<span style="color:var(--crit);font-weight:700">${counts.weak} weak</span>` : ""}</div></div>
       <div class="meta"><span>${nextEx ? `${icon("target", "ico-sm")} ${esc(nextEx.title.replace(sub.name, "").trim() || "Test")} ${esc(relLow(nextEx.date))}` : nextT ? `Next: ${esc(nextT.title.length > 30 ? nextT.title.slice(0, 28) + "…" : nextT.title)}` : "Nothing due"}</span></div>
     </button>`;
   }).join("");
-  return `<div class="page-head"><div><h1>Subjects</h1><p class="sub">Syllabus, grades, notes and how to study each one.</p></div><button type="button" class="btn primary" data-act="add-subject">${icon("plus")}Add subject</button></div>
+  return `<div class="page-head"><div><h1>Subjects</h1><p class="sub">Syllabus, grades, notes and how to study each one.</p></div><div class="row-flex"><button type="button" class="btn" data-act="import-astar">${icon("upload", "ico-sm")}Import from A* Planner</button><button type="button" class="btn" data-act="paste-syllabus">${icon("note", "ico-sm")}Paste whole syllabus</button><button type="button" class="btn primary" data-act="add-subject">${icon("plus")}Add subject</button></div></div>
     <div class="subj-grid">${cards}</div>`;
 };
 
@@ -424,7 +426,7 @@ function subjectGradesHTML(sub) {
     const p = !up && a.max ? (a.score / a.max) * 100 : null;
     return `<tr><td><b>${esc(a.title)}</b></td><td class="muted small">${a.date ? SF.fmtDay(a.date) : "–"}</td>
       <td class="num mono">${up ? `<span class="pill">Upcoming</span>` : `${esc(a.score)}/${esc(a.max)}`}</td><td class="num mono">${p == null ? "" : Math.round(p) + "%"}</td>
-      <td class="num mono">${g.anyW ? (Number(a.weight) || 0) + "%" : "equal"}</td>
+      <td class="num mono">${g.anyW ? (Number(a.weight) || 0) + "%" : "by marks"}</td>
       <td class="num"><button type="button" class="btn ghost xs" data-act="edit-assessment" data-id="${esc(a.id)}" aria-label="Edit ${esc(a.title)}">${icon("edit", "ico-sm")}</button></td></tr>`;
   }).join("");
   const vcls = g.verdict ? { secured: "good", realistic: "good", open: "info", stretch: "warn", hard: "crit", impossible: "crit" }[g.verdict.key] : "";
@@ -436,9 +438,9 @@ function subjectGradesHTML(sub) {
   else explain = `To finish on ${g.target}%, you need an average of ${pct(g.needed)} across the remaining ${g.anyW ? g.wUp + "% of the grade" : plural(g.upcoming.length, "assessment")}.${g.avg != null ? ` You're averaging ${pct(g.avg)} so far, so that's ${{ realistic: "realistic", stretch: "a stretch", hard: "very hard", open: "doable" }[g.verdict.key] || g.verdict.label.toLowerCase()}.` : ""}`;
   return `<div class="stack" style="gap:20px">
     <section class="panel"><div class="panel-head"><h2>Target calculator</h2>
-      <label class="row-flex small"><span class="label">Target</span><input class="input sm mono" style="width:84px" type="number" min="0" max="100" id="tg-${esc(sub.id)}" data-change="subject-target" data-id="${esc(sub.id)}" value="${g.target ?? ""}" aria-label="Target grade percent"><span>%</span></label></div>
+      <label class="row-flex small"><span class="label">Target</span><input class="input sm mono" style="width:84px" type="number" min="0" max="100" id="tg-${esc(sub.id)}" data-change="subject-target" data-id="${esc(sub.id)}" value="${g.target ?? ""}" aria-label="Target grade percent"><span>%</span>${SF.letterFor(g.target, sub.grades) ? `<span class="pill info">${esc(SF.letterFor(g.target, sub.grades))}</span>` : ""}</label></div>
       <div class="calc">
-        <div class="stat"><span>Current weighted grade</span><b>${pct(g.avg)}</b></div>
+        <div class="stat"><span>Current ${g.anyW ? "weighted" : "overall"} grade</span><b>${pct(g.avg)}${SF.letterFor(g.avg, sub.grades) ? ` <span style="font-size:18px">${esc(SF.letterFor(g.avg, sub.grades))}</span>` : ""}</b></div>
         <div class="stat hl"><span>Needed on what's left</span><b>${g.needed == null ? "–" : g.needed <= 0 ? "0%" : pct(g.needed)}</b></div>
         <div class="stat"><span>Best possible finish</span><b>${g.maxPossible == null ? pct(g.avg) : pct(g.maxPossible)}</b></div>
         <div class="stat"><span>Since last assessment</span><b>${g.delta == null ? "–" : (g.delta >= 0 ? "+" : "") + Math.round(g.delta) + "%"}</b></div>
@@ -880,6 +882,7 @@ V.settings = () => {
         <div class="stack-sm">
           <div class="row-flex"><span id="save-state-2" class="save-state ${Store.status === "local" || Store.status === "offline" ? "local" : Store.status === "error" ? "err" : ""}"><i></i></span><span>${window.SF_WEB ? (Store.mode === "offline" ? "You're offline. Changes stay on this device and sync to your account when you reconnect." : "Saved to your StudyFlow account. Only you can see it, on any device where you sign in.") : Store.mode === "cloud" ? "Saved to your Claude account. Only you can see it, on any device where you open this page." : "Saved in this browser only. It stays on this device, and clearing site data erases it, so keep a backup."}</span></div>
           ${window.SF_WEB ? "" : `<div class="row-flex"><span class="pill ${AI.on() ? "good" : ""}">${icon("ai", "ico-sm")}${AI.on() ? "AI features on" : AI.denied ? "AI declined" : "AI unavailable here"}</span><span class="small muted">${AI.on() ? "Claude runs on your own account and asks permission the first time." : AI.denied ? "Reload the page to be asked again." : "Open this page in Claude to use AI features."}</span></div>`}
+          <div class="row-flex" style="margin-top:8px"><button type="button" class="btn" data-act="import-astar">${icon("upload", "ico-sm")}Import from A* Planner</button><button type="button" class="btn" data-act="paste-syllabus">${icon("note", "ico-sm")}Paste whole syllabus</button></div>
           <div class="row-flex" style="margin-top:8px"><button type="button" class="btn" data-act="backup">${icon("download", "ico-sm")}Download a backup</button>
             <label class="btn" for="restore-file">${icon("upload", "ico-sm")}Restore from backup</label><input id="restore-file" type="file" accept="application/json,.json" data-change="restore" class="sr"></div>
           ${s.meta.isExample ? `<button type="button" class="btn" data-act="clear-example">Clear example data</button>` : !SF.hasData(s) ? `<button type="button" class="btn" data-act="load-example">Load example data</button>` : ""}
